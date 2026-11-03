@@ -47,7 +47,7 @@ Section "Install"
  Abort
  install_new:
  SetOutPath "$INSTDIR"
- File /r "@PAYLOAD@/*"
+ File /r "@PAYLOAD_FILES@"
  WriteUninstaller "$INSTDIR\\Uninstall.exe"
  CreateDirectory "$SMPROGRAMS\\Product Architect @VERSION@"
  CreateShortcut "$SMPROGRAMS\\Product Architect @VERSION@\\Start.lnk" "$INSTDIR\\start.cmd"
@@ -62,7 +62,7 @@ Section "Uninstall"
  RMDir "$SMPROGRAMS\\Product Architect @VERSION@"
  MessageBox MB_OK "Project source, API configuration and data remain in $INSTDIR. Export data before removing the folder."
 SectionEnd
-'''.replace('@OUTPUT@',quoted(target)).replace('@PAYLOAD@',quoted(payload)).replace('@VERSION@',version)
+'''.replace('@OUTPUT@',quoted(target)).replace('@PAYLOAD_FILES@',quoted(payload/'*')).replace('@VERSION@',version)
    source=stage/'installer.nsi';source.write_text(script,encoding='utf-8');subprocess.run([compiler,'-V2',str(source)],check=True)
  return target
 
