@@ -13,6 +13,18 @@ TERMINAL={'completed','failed_validation','failed','failed_model','failed_sandbo
 UUID_RE=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 EXCLUSIONS=['.env与API密钥配置','虚拟环境、node_modules、Docker镜像','构建缓存、浏览器测试缓存、OCR语言缓存','临时上传、旧备份与恢复副本','服务PID、原始日志及本机网络/容器配置']
 class ArchiveError(Exception):pass
+class OperationCancelled(ArchiveError):pass
+
+def checkpoint(progress=None,cancelled=None,phase='',done=0,total=1):
+ if cancelled and cancelled():raise OperationCancelled('操作已取消；原工作台和原备份保留。')
+ if progress:progress(phase,done,max(total,1))
+
+def compatibility(source,target):
+ if source==target:return {'compatible':True,'source_version':source,'target_version':target,'migration_required':False,'steps':[],'destructive':False}
+ if (source,target)==('0.2.0','0.3.0'):
+  return {'compatible':True,'source_version':source,'target_version':target,'migration_required':True,'destructive':False,'steps':['保留全部项目、检查点、知识库与费用记录','新增文档任务取消字段，不删除或改写已有字段','保留一份迁移前原始备份','新副本保持密钥为空、模型调用关闭']}
+ return {'compatible':False,'source_version':source,'target_version':target,'migration_required':False,'destructive':False,'steps':[],'requires_user_decision':True}
+
 
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def file_sha(path):
@@ -110,8 +122,8 @@ def plan(root):
   value=groups.setdefault(group,{'files':0,'bytes':0});value['files']+=1;value['bytes']+=size
  return {'file_count':len(files),'bytes':sum(v[0] for v in files.values()),'groups':[{'name':k,**v} for k,v in sorted(groups.items())],'excluded':EXCLUSIONS,'credentials_included':False,'format':1,'max_bytes':LIMIT,'warning':'备份包含项目、文档正文和业务资料，请私下保管；不会上传到任何平台。用户资料正文原样保留。'}
 
-def create(root,destination):
- ensure_idle(root);before=walk(root);entries=[]
+def create(root,destination,progress=None,cancelled=None):
+ checkpoint(progress,cancelled,'准备快照');ensure_idle(root);before=walk(root);entries=[]
  from dotenv import dotenv_values
  env=safe_path(root,'.env');values={**os.environ,**(dict(dotenv_values(env)) if env.is_file() else {})}
  credentials=[str(v).encode() for k,v in values.items() if v and len(str(v))>=8 and re.search(r'(?:API_KEY|SECRET|TOKEN|PASSWORD)$',k,re.I)]
@@ -120,12 +132,13 @@ def create(root,destination):
  try:
   with tempfile.TemporaryDirectory(dir=destination.parent) as temp,zipfile.ZipFile(destination,'x',zipfile.ZIP_DEFLATED) as archive:
    total=0
-   for name in sorted(before):
+   for index,name in enumerate(sorted(before)):
+    checkpoint(progress,cancelled,'备份文件',index,len(before))
     path=safe_path(root,name)
     if path.suffix in {'.sqlite3','.db'}:
      sqlite_path(root,name)
      snapshot=Path(temp)/'snapshot.sqlite3'
-     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as old,closing(sqlite3.connect(snapshot)) as new:old.backup(new)
+     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as old,closing(sqlite3.connect(snapshot)) as new:old.backup(new,pages=64,progress=lambda status,left,total:checkpoint(progress,cancelled,'数据库快照',total-left,total))
      with closing(sqlite3.connect(snapshot)) as conn:
       if conn.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise ArchiveError('数据库完整性检查未通过。')
      raw=snapshot.read_bytes();snapshot.unlink()
@@ -139,11 +152,12 @@ def create(root,destination):
    manifest={'product':'product-architect-workbench','format':1,'app_version':version(root),'created_at':time.time(),'files':entries,'excluded':EXCLUSIONS,'credentials_included':False}
    archive.writestr('WORKBENCH_MANIFEST.json',json.dumps(manifest,ensure_ascii=False))
   if walk(root)!=before:raise ArchiveError('备份期间有文件变化，未生成不一致备份；请停止编辑后重试。')
-  inspect(destination,version(root));destination.chmod(0o600)
+  inspect(destination,version(root),progress,cancelled);destination.chmod(0o600)
+  checkpoint(progress,cancelled,'备份完成',1,1)
   return manifest
  except BaseException:destination.unlink(missing_ok=True);raise
 
-def inspect(path,expected_version):
+def inspect(path,expected_version,progress=None,cancelled=None):
  if path.is_symlink() or path.stat().st_size>LIMIT:raise ArchiveError('备份文件异常或超过512MiB。')
  try:
   with zipfile.ZipFile(path) as archive:
@@ -154,15 +168,19 @@ def inspect(path,expected_version):
    if archive.getinfo('WORKBENCH_MANIFEST.json').file_size>8*1024**2:raise ArchiveError('清单过大。')
    manifest=json.loads(archive.read('WORKBENCH_MANIFEST.json'))
    if not isinstance(manifest,dict):raise ArchiveError('备份清单必须是对象。')
-   if manifest.get('product')!='product-architect-workbench' or manifest.get('format')!=1 or manifest.get('app_version')!=expected_version or manifest.get('credentials_included') is not False:raise ArchiveError('备份格式或应用版本不兼容；请使用创建备份时的应用版本。')
+   if manifest.get('product')!='product-architect-workbench' or manifest.get('format')!=1 or manifest.get('credentials_included') is not False:raise ArchiveError('备份格式或应用版本不兼容；请使用创建备份时的应用版本。')
+   migration=compatibility(manifest.get('app_version'),expected_version)
+   if not migration['compatible']:raise ArchiveError('此版本没有已审核的兼容迁移路径，未修改数据；需要确认迁移方案或使用原版本恢复。')
    entries={x['path']:x for x in manifest['files']}
    if 'settings.json' not in entries or len(entries)!=len(manifest['files']) or set(entries)|{'WORKBENCH_MANIFEST.json'}!=names:raise ArchiveError('文件与备份清单不一致。')
-   for name,entry in entries.items():
+   for index,(name,entry) in enumerate(entries.items()):
+    checkpoint(progress,cancelled,'校验备份',index,len(entries))
     if not allowed(name):raise ArchiveError('备份包含不支持的路径或凭证配置。')
     raw=archive.read(name)
     if len(raw)!=entry['bytes'] or sha(raw)!=entry['sha256']:raise ArchiveError('备份哈希校验失败。')
    prefs=json.loads(archive.read('settings.json'))
    if not isinstance(prefs,dict) or any(k not in settings_allowed() or not isinstance(v,str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,80}',v) for k,v in prefs.items()):raise ArchiveError('备份配置不符合白名单。')
+   manifest['compatibility']=migration
    return manifest
  except (zipfile.BadZipFile,KeyError,TypeError,ValueError,UnicodeError,RuntimeError) as e:raise ArchiveError('备份文件损坏或清单无效。') from e
 
@@ -171,8 +189,8 @@ def distribution(root):
 
 def restore_home(root):return safe_path(root.parent,root.name+'-restored')
 
-def restore(root,archive_path,token):
- manifest=inspect(archive_path,version(root));ensure_idle(root)
+def restore(root,archive_path,token,progress=None,cancelled=None):
+ manifest=inspect(archive_path,version(root),progress,cancelled);ensure_idle(root)
  home=restore_home(root);home.mkdir(parents=True,exist_ok=True,mode=0o700)
  target=safe_path(root.parent,root.name+'-restored/'+str(uuid.UUID(str(token))))
  if target.exists():
@@ -180,15 +198,32 @@ def restore(root,archive_path,token):
   if receipt.is_file() and json.loads(receipt.read_text()).get('archive_sha256')==file_sha(archive_path):return {'location':str(target),'replayed':True,'executed':False,'restart_required':True}
   raise ArchiveError('恢复目标已存在，未覆盖。')
  total=sum(e['bytes'] for e in manifest['files'])
- if shutil.disk_usage(home).free<total+256*1024**2:raise ArchiveError('磁盘不足以保留当前工作台并创建恢复副本。')
+ if shutil.disk_usage(home).free<total+archive_path.stat().st_size+256*1024**2:raise ArchiveError('磁盘不足以保留当前工作台并创建恢复副本。')
  stage=Path(tempfile.mkdtemp(prefix='.restore-',dir=home));payload=stage/'installation'
  try:
-  builder=distribution(root);package=builder.build(root,stage/'source-package',kind='source');builder.extract(package,payload)
+  checkpoint(progress,cancelled,'准备独立工作台')
+  builder=distribution(root)
+  try:package=builder.build(root,stage/'source-package',kind='source');builder.extract(package,payload)
+  except builder.DistributionError as error:raise ArchiveError(str(error)) from None
   with zipfile.ZipFile(archive_path) as archive:
-   for entry in manifest['files']:
+   for index,entry in enumerate(manifest['files']):
+    checkpoint(progress,cancelled,'恢复文件',index,len(manifest['files']))
     if entry['path']=='settings.json':continue
     path=safe_path(payload,entry['path']);path.parent.mkdir(parents=True,exist_ok=True,mode=0o700);path.write_bytes(archive.read(entry['path']));path.chmod(0o600)
    prefs=json.loads(archive.read('settings.json'))
+  migration=manifest['compatibility']
+  if migration['migration_required']:
+   checkpoint(progress,cancelled,'保留迁移前备份')
+   old=payload/'data/workbench/migration-original.zip';old.parent.mkdir(parents=True,exist_ok=True)
+   with archive_path.open('rb') as src,old.open('xb') as dst:
+    for block in iter(lambda:src.read(1024*1024),b''):
+     checkpoint(None,cancelled);dst.write(block)
+   old.chmod(0o600)
+   db=payload/'data/knowledge/library.sqlite3'
+   if db.is_file():
+    with closing(sqlite3.connect(db)) as conn:
+     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone() and 'cancel_requested' not in {r[1] for r in conn.execute('PRAGMA table_info(jobs)')}:
+      conn.execute('ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0');conn.commit()
   # Never restore executable Git settings, hooks, alternates, or private filesystem bindings.
   for git in (payload/'data/git').glob('*') if (payload/'data/git').exists() else []:
    (git/'config').write_text('[core]\n repositoryformatversion = 0\n bare = false\n[user]\n name = Product Architect Agent\n email = agent@localhost\n')
@@ -217,9 +252,10 @@ def restore(root,archive_path,token):
      Path(folder).chmod(0o777)
      for name in names:(Path(folder)/name).chmod(0o666)
   receipt=payload/'data/workbench-restore-receipt.json';receipt.parent.mkdir(exist_ok=True)
-  receipt.write_text(json.dumps({'format':1,'archive_sha256':file_sha(archive_path),'restored_at':time.time(),'keys_restored':False,'calls_enabled':False}));receipt.chmod(0o600)
+  receipt.write_text(json.dumps({'format':1,'archive_sha256':file_sha(archive_path),'restored_at':time.time(),'keys_restored':False,'calls_enabled':False,'migration':migration,'pre_migration_archive':'data/workbench/migration-original.zip' if migration['migration_required'] else None}));receipt.chmod(0o600)
+  checkpoint(progress,cancelled,'提交独立副本',1,1)
   os.rename(payload,target)
-  return {'location':str(target),'replayed':False,'executed':False,'restart_required':True,'next':'副本已创建。停止当前工作台，在新目录运行安装入口，重新填写自己的密钥后启动；尚未执行生成代码。'}
+  return {'location':str(target),'replayed':False,'migration':migration,'executed':False,'restart_required':True,'next':'副本已创建。停止当前工作台，在新目录运行安装入口，重新填写自己的密钥后启动；尚未执行生成代码。'}
  finally:shutil.rmtree(stage,ignore_errors=True)
 
 def settings_allowed():return {'MODEL_NAME','MODEL_PROVIDER','MODEL_BUDGET_CNY','VISION_MODEL','VISION_PROVIDER','VISION_BUDGET_CNY','VISION_MAX_CALLS_TOTAL','VISION_FREE_ONLY'}

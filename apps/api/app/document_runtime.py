@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .platform_support import exclusive_file, kill_process_group, WindowsJob
+from contextlib import contextmanager
 import importlib.util
 import json
 import os
@@ -23,6 +24,16 @@ MEMORY_BYTES = 768 * 1024 * 1024
 TIMEOUT_SECONDS = 300
 OCR_PAGES = 20
 _thread_gate = threading.BoundedSemaphore(1)
+_cancel_context=threading.local()
+@contextmanager
+def cancellation(check):
+ previous=getattr(_cancel_context,'check',None);_cancel_context.check=check
+ try:yield
+ finally:_cancel_context.check=previous
+
+def check_cancelled():
+ check=getattr(_cancel_context,'check',None)
+ if check and check():raise DocumentRuntimeError('资料处理已取消，原始资料保留。')
 
 
 class DocumentRuntimeError(Exception):
@@ -48,13 +59,19 @@ def extract_document(raw: bytes, suffix: str):
     if (ROOT / 'data').is_symlink() or DATA.is_symlink() or (DATA / 'worker.lock').is_symlink():
         raise DocumentRuntimeError('资料处理目录异常。')
     DATA.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with _thread_gate, (DATA / 'worker.lock').open('a+b') as lock:
-        try:
-            with exclusive_file(lock):return _run(raw,suffix)
-        except TimeoutError:raise DocumentRuntimeError('本地解析任务繁忙，请稍后重试。') from None
+    while not _thread_gate.acquire(timeout=.1):check_cancelled()
+    try:
+        check_cancelled()
+        with (DATA/'worker.lock').open('a+b') as lock:
+            try:
+                with exclusive_file(lock,cancelled=getattr(_cancel_context,'check',None)):return _run(raw,suffix)
+            except InterruptedError:raise DocumentRuntimeError('资料处理已取消，原始资料保留。') from None
+            except TimeoutError:raise DocumentRuntimeError('本地解析任务繁忙，请稍后重试。') from None
+    finally:_thread_gate.release()
 
 
 def _run(raw, suffix):
+    check_cancelled()
     env = {key: value for key, value in os.environ.items() if key in {'PATH', 'LANG', 'LC_ALL', 'SYSTEMROOT'}}
     env.update(PYTHONUTF8='1', PYTHONIOENCODING='utf-8', OMP_THREAD_LIMIT='1', OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
                VECLIB_MAXIMUM_THREADS='1')
@@ -71,6 +88,7 @@ def _run(raw, suffix):
             try:
                 parent = psutil.Process(process.pid)
                 while process.poll() is None:
+                    check_cancelled()
                     if time.monotonic() - started > TIMEOUT_SECONDS:
                         raise DocumentRuntimeError('本地解析超过300秒，已停止整组处理进程。请拆分文件后重试。')
                     try:

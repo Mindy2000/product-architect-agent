@@ -81,8 +81,8 @@ def ensure_image(mode):
 def fixed_script(phase):
     if phase=='build':return 'APP_DATABASE=/tmp/pa-test.sqlite3 /opt/fullstack/venv/bin/python -m backend.runtime migrate && npm run build'
     if phase=='migrate':return 'APP_DATABASE=/appdata/app.sqlite3 /opt/fullstack/venv/bin/python -m backend.runtime migrate'
-    if phase not in {'test','acceptance','preview'}:raise runner.SandboxError('未知全栈命令。')
-    target={'test':'npm run test:e2e','acceptance':'./node_modules/.bin/playwright test tests/acceptance.spec.ts --reporter=line','preview':'./node_modules/.bin/playwright test tests/preview.spec.ts --reporter=line'}[phase]
+    if phase not in {'test','acceptance','preview','regression'}:raise runner.SandboxError('未知全栈命令。')
+    target={'regression':'./node_modules/.bin/playwright test --reporter=line,json','test':'npm run test:e2e','acceptance':'./node_modules/.bin/playwright test tests/acceptance.spec.ts --reporter=line','preview':'./node_modules/.bin/playwright test tests/preview.spec.ts --reporter=line'}[phase]
     return 'set -e; export APP_DATABASE=/tmp/pa-test.sqlite3; /opt/fullstack/venv/bin/python -m backend.runtime migrate; /opt/fullstack/venv/bin/python -m uvicorn backend.runtime:app --host 127.0.0.1 --port 8001 --workers 1 >/tmp/backend.log 2>&1 & wait_backend=$!; trap "kill $wait_backend 2>/dev/null || true" EXIT; /opt/fullstack/venv/bin/python backend/wait_ready.py; '+target
 
 

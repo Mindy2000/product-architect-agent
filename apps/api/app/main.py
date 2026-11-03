@@ -17,12 +17,12 @@ from .security_policy import LocalSafetyMiddleware, MAX_QUEUED_RUNS, redact, saf
 from .graph import build_graph
 from .model import SUPPORTED_MODELS, BudgetExceeded, ModelCallFailed, ModelNotConfigured, budget_status
 from .runner import SandboxError, worker_image_available
-from . import store, workbench
+from . import store, workbench, regression
 from . import designs, references, knowledge, library, history, maintenance, operations, dify, dependencies, source_import, model_capabilities, vision, fullstack, application_storage, research
 
 app = FastAPI(title="Product Architect Agent", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
-app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type"])
 app.include_router(workbench.router)
+app.include_router(regression.router)
 app.include_router(designs.router)
 app.include_router(references.router)
 app.include_router(knowledge.router)
@@ -134,6 +134,7 @@ async def _dispatch_in_background(run_id:str,initial_state:dict|None=None):
 def startup():
     global workflow
     store.connect().close()
+    workbench.jobs.recover(workbench.root())
     store.interrupt_active_runs()
     designs.recover_interrupted()
     library.recover_interrupted()
@@ -152,6 +153,7 @@ def startup():
 
 @app.on_event("shutdown")
 def shutdown():
+    workbench.jobs.shutdown(workbench.root())
     from .preview import close_all
     close_all()
     if workflow is not None:
@@ -594,6 +596,7 @@ async def workbench_error(request:Request,error:Exception):
     return JSONResponse(status_code=409,content={'detail':str(error)})
 
 app.add_middleware(workbench.MaintenanceMiddleware)
+app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type"])
 
 # Keep access and body checks outside audit/CORS and all feature routers.
 app.add_middleware(LocalSafetyMiddleware)

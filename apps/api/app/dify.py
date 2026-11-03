@@ -87,6 +87,7 @@ def call(method,path,payload=None,*,kind='metadata',cache_seconds=0):
                 content=response.read(2*1024*1024+1)
                 if len(content)>2*1024*1024:raise DifyError('Dify响应超限。')
                 value=json.loads(content)
+                if not isinstance(value,dict):raise DifyError('Dify响应格式无效。')
         except error.HTTPError as exc:
             status=str(exc.code)
             # Do not expose response bodies, request headers or credentials.
@@ -211,7 +212,7 @@ def refresh(dataset_id:uuid.UUID):
 def capture(ids,query,top_k=3,max_characters=6000):
     if not ids:return None
     if len(set(ids))!=len(ids) or len(ids)>2:raise DifyError('最多选择2个不同的Dify知识库。')
-    chunks=[]
+    chunks=[];seen=set()
     for dataset in ids:
         identifier=owned(dataset)
         conn=connect()
@@ -220,13 +221,22 @@ def capture(ids,query,top_k=3,max_characters=6000):
             if not any(row['status']=='completed' for row in rows):raise DifyError('Dify知识库尚无索引完成的资料，请刷新状态。')
         finally:conn.close()
         result=call('POST',f'/datasets/{identifier}/retrieve',{'query':query[:2000],'retrieval_model':{'search_method':'semantic_search','reranking_enable':False,'top_k':min(top_k,3),'score_threshold_enabled':False}},kind='retrieve',cache_seconds=86400)
-        for item in result.get('records',[]):
-            segment=item.get('segment') or {};document=segment.get('document') or {};content=segment.get('content','')
+        records=result.get('records',[])
+        if not isinstance(records,list):raise DifyError('Dify检索结果格式异常，未采信来源。')
+        for item in records:
+            if not isinstance(item,dict):raise DifyError('Dify切片格式异常，未采信来源。')
+            segment=item.get('segment') or {}
+            if not isinstance(segment,dict):raise DifyError('Dify切片格式异常，未采信来源。')
+            document=segment.get('document') or {};content=segment.get('content','')
+            if not isinstance(document,dict) or not isinstance(content,str):raise DifyError('Dify来源格式异常，未采信来源。')
             if not content:continue
             score=item.get('score')
             score=min(1.0,max(0.0,float(score))) if isinstance(score,(int,float)) and math.isfinite(score) else None
             origin=next((row for row in rows if row['remote_id']==document.get('id')),None)
+            if origin is None:continue
             chunk_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'dify:'+identifier+':'+str(segment.get('id') or content)))
+            if chunk_id in seen:continue
+            seen.add(chunk_id)
             chunks.append({'chunk_id':chunk_id,'provider_id':'dify_cloud','collection_id':identifier,'document_id':document.get('id','unknown'),
                 'document_sha256':origin['sha256'] if origin else None,'content':content,'score':score,
                 'source':{'source_id':document.get('id') or chunk_id,'title':str(document.get('name') or (origin['name'] if origin else 'Dify资料'))[:300],
@@ -235,7 +245,7 @@ def capture(ids,query,top_k=3,max_characters=6000):
     for chunk in chunks[:top_k]:
         if remaining<=0:break
         value={**chunk,'content':chunk['content'][:remaining]};remaining-=len(value['content']);bounded.append(value)
-    return {'provider_id':'dify_cloud','status':'ok','query':query,'retrieval_id':str(uuid.uuid4()),'chunks':bounded,'message':'Dify远程语义检索；同查询复用24小时缓存，不进行问答生成。'}
+    return {'provider_id':'dify_cloud','status':'ok' if bounded else 'empty','query':query,'retrieval_id':str(uuid.uuid4()),'chunks':bounded,'message':'Dify远程语义检索；同查询复用24小时缓存，不进行问答生成。' if bounded else '没有可核验的命中片段；不编造来源，同查询复用缓存。'}
 
 
 class Search(BaseModel):

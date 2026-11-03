@@ -6,7 +6,10 @@ on:
 permissions:
   contents: read
 jobs:
+  quality:
+    uses: ./.github/workflows/offline-quality.yml
   package:
+    needs: quality
     strategy:
       fail-fast: false
       matrix:

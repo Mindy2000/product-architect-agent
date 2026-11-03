@@ -74,6 +74,7 @@ def connect():
     ''')
     try:conn.execute('CREATE VIRTUAL TABLE IF NOT EXISTS chunk_search USING fts5(chunk_id UNINDEXED,terms)')
     except sqlite3.OperationalError:pass
+    if 'cancel_requested' not in {row[1] for row in conn.execute('PRAGMA table_info(jobs)')}:conn.execute('ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0')
     conn.commit()
     return conn
 
@@ -105,7 +106,9 @@ def collection_rows(ids:list[str],require_ready=False):
 def document(row):
     value=dict(row)
     value['warnings']=json.loads(value['warnings'])
-    value['can_retry']=value['status'] in {'failed','needs_ocr','interrupted','ready'}
+    started=datetime.fromisoformat(value['created_at']).timestamp();end=time.time() if value['status'] in ACTIVE else datetime.fromisoformat(value['updated_at']).timestamp()
+    value['elapsed_seconds']=round(max(0,end-started),1);value['can_cancel']=value['status'] in ACTIVE
+    value['can_retry']=value['status'] in {'failed','needs_ocr','interrupted','ready','cancelled'}
     return value
 
 
@@ -141,7 +144,7 @@ def set_phase(doc_id,job_id,status,progress,error='',warnings=None):
     try:
         conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT job_id FROM documents WHERE id=?',(doc_id,)).fetchone()
-        if not row or row['job_id']!=job_id:return False
+        if not row or row['job_id']!=job_id or conn.execute('SELECT cancel_requested FROM jobs WHERE id=?',(job_id,)).fetchone()[0]:return False
         conn.execute('UPDATE documents SET status=?,progress=?,error=?,updated_at=? WHERE id=?',(status,progress,error,now(),doc_id))
         if warnings is not None:conn.execute('UPDATE documents SET warnings=? WHERE id=?',(json.dumps(warnings,ensure_ascii=False),doc_id))
         conn.execute('UPDATE jobs SET status=?,progress=?,error=?,started_at=COALESCE(started_at,?),completed_at=? WHERE id=?',
@@ -164,9 +167,18 @@ def extract(doc:dict):
     return [{'page':None,'text':text}]
 
 
+def job_cancelled(job_id):
+    conn=connect()
+    try:
+        row=conn.execute('SELECT cancel_requested FROM jobs WHERE id=?',(job_id,)).fetchone()
+        return not row or bool(row[0])
+    finally:conn.close()
+
+
 def process_document(doc_id:str,job_id:str):
-    with _processing:
-        _process_document(doc_id,job_id)
+    from .document_runtime import cancellation
+    with _processing,cancellation(lambda:job_cancelled(job_id)):
+        if not job_cancelled(job_id):_process_document(doc_id,job_id)
 
 
 def _process_document(doc_id:str,job_id:str):
@@ -181,7 +193,7 @@ def _process_document(doc_id:str,job_id:str):
         pages=extract(doc)
         conn=connect()
         try:
-            conn.execute('UPDATE documents SET page_count=? WHERE id=? AND job_id=?',(len(pages),doc_id,job_id));conn.commit()
+            conn.execute('UPDATE documents SET page_count=? WHERE id=? AND job_id=? AND NOT EXISTS (SELECT 1 FROM jobs WHERE id=? AND cancel_requested=1)',(len(pages),doc_id,job_id,job_id));conn.commit()
         finally:conn.close()
         empty=[page['page'] for page in pages if page['page'] and not page['text'].strip()]
         warnings=[f"以下页/文本单元无可提取文字，未索引：{','.join(map(str,empty[:30]))}"] if empty else []
@@ -199,7 +211,7 @@ def _process_document(doc_id:str,job_id:str):
         try:
             conn.execute('BEGIN IMMEDIATE')
             current=conn.execute('SELECT job_id FROM documents WHERE id=?',(doc_id,)).fetchone()
-            if not current or current['job_id']!=job_id:return
+            if not current or current['job_id']!=job_id or conn.execute('SELECT cancel_requested FROM jobs WHERE id=?',(job_id,)).fetchone()[0]:return
             if conn.execute('SELECT COUNT(*) FROM chunks WHERE document_id!=?',(doc_id,)).fetchone()[0]+len(chunks)>MAX_CHUNKS:raise KnowledgeError('本地索引已达到50000段上限，请删除不再使用的资料。')
             conn.execute('DELETE FROM chunk_search WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id=?)',(doc_id,))
             conn.execute('DELETE FROM chunks WHERE document_id=?',(doc_id,))
@@ -212,6 +224,7 @@ def _process_document(doc_id:str,job_id:str):
             conn.commit()
         finally:conn.close()
     except Exception as error:
+        if job_cancelled(job_id):return
         message=str(error) if isinstance(error,KnowledgeError) else '索引未完成，原文件保留；请检查解析依赖或稍后重试。'
         set_phase(doc_id,job_id,'failed',0,message)
 
@@ -269,7 +282,7 @@ async def upload_document(collection_id:uuid.UUID,request:Request,background_tas
         quota=conn.execute('SELECT COUNT(*),COALESCE(SUM(bytes),0) FROM documents').fetchone()
         if quota[0]>=MAX_DOCUMENTS or quota[1]+MAX_FILE_BYTES>MAX_LIBRARY_BYTES:raise HTTPException(413,'资料库容量不足，单份上传需预留20MiB。')
         conn.execute('INSERT INTO documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(identifier,str(collection_id),filename,MAX_FILE_BYTES,'','uploading',0,'','[]',0,0,job_id,created,created))
-        conn.execute('INSERT INTO jobs VALUES (?,?,?,0,\'\',NULL,NULL)',(job_id,identifier,'uploading'));conn.commit()
+        conn.execute('INSERT INTO jobs(id,document_id,status,progress,error,started_at,completed_at) VALUES (?,?,?,0,\'\',NULL,NULL)',(job_id,identifier,'uploading'));conn.commit()
     finally:conn.close()
     try:
         size=0;sha=hashlib.sha256()
@@ -323,7 +336,8 @@ def get_job(job_id:uuid.UUID):
     try:
         row=conn.execute('SELECT j.*,d.collection_id,d.filename FROM jobs j JOIN documents d ON d.id=j.document_id WHERE j.id=?',(str(job_id),)).fetchone()
         if not row:raise HTTPException(404,'未找到索引任务。')
-        return {**dict(row),'provider_id':'local_full_text'}
+        value=dict(row);started=datetime.fromisoformat(value['started_at'] or get_document(uuid.UUID(value['document_id']))['created_at']).timestamp();ended=datetime.fromisoformat(value['completed_at']).timestamp() if value['completed_at'] else time.time()
+        return {**value,'provider_id':'local_full_text','elapsed_seconds':round(max(0,ended-started),1),'can_cancel':value['status'] in ACTIVE}
     finally:conn.close()
 
 
@@ -345,9 +359,9 @@ def retry_document(document_id:uuid.UUID,background_tasks:BackgroundTasks):
         conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT status FROM documents WHERE id=?',(identifier,)).fetchone()
         if not row:raise HTTPException(404,'未找到资料。')
-        if row['status'] not in {'failed','interrupted','needs_ocr','ready'}:raise HTTPException(409,'仅可对处理已结束的资料重建索引。')
+        if row['status'] not in {'failed','interrupted','needs_ocr','ready','cancelled'}:raise HTTPException(409,'仅可对处理已结束的资料重建索引。')
         conn.execute('UPDATE documents SET status=\'queued\',progress=5,error=\'\',job_id=?,updated_at=? WHERE id=?',(job_id,now(),identifier))
-        conn.execute('INSERT INTO jobs VALUES (?,?,?,5,\'\',NULL,NULL)',(job_id,identifier,'queued'));conn.commit()
+        conn.execute('INSERT INTO jobs(id,document_id,status,progress,error,started_at,completed_at) VALUES (?,?,?,5,\'\',NULL,NULL)',(job_id,identifier,'queued'));conn.commit()
     finally:conn.close()
     background_tasks.add_task(process_document,identifier,job_id)
     return {'id':identifier,'status':'queued','job_id':job_id}
@@ -479,3 +493,17 @@ def check_citations(payload:CitationCheck):
             result.append({'chunk_id':item.get('chunk_id'),'document_id':identifier,'status':state,'replacement_id':newer['document_id'] if newer else None})
         return {'items':result,'note':'历史冻结片段仍保留；重新生成方案才更新引用。'}
     finally:conn.close()
+
+
+@router.post('/jobs/{job_id}/cancel')
+def cancel_job(job_id:uuid.UUID):
+    conn=connect()
+    try:
+        conn.execute('BEGIN IMMEDIATE');row=conn.execute('SELECT * FROM jobs WHERE id=?',(str(job_id),)).fetchone()
+        if not row:raise HTTPException(404,'索引任务不存在。')
+        if row['status'] not in ACTIVE:raise HTTPException(409,'任务已结束，不能撤销已完成的索引。')
+        conn.execute("UPDATE jobs SET cancel_requested=1,status='cancelled',completed_at=?,error='已取消，原始资料保留。' WHERE id=?",(now(),str(job_id)))
+        existing=conn.execute('SELECT COUNT(*) FROM chunks WHERE document_id=?',(row['document_id'],)).fetchone()[0]
+        conn.execute("UPDATE documents SET status=?,progress=CASE WHEN ? THEN 100 ELSE progress END,error=?,updated_at=? WHERE id=? AND job_id=?",('ready' if existing else 'cancelled',bool(existing),'重建已取消，原索引仍可用。' if existing else '已取消，原始资料保留；可重试。',now(),row['document_id'],str(job_id)));conn.commit()
+    finally:conn.close()
+    return {'cancel_requested':True,'raw_file_preserved':True,'message':'取消已收到，正在解析的进程会停止；原始资料保留。'}

@@ -279,7 +279,7 @@ def _trim(value: str, limit: int = 12_000) -> str:
 
 
 def run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: Path | None = None) -> CommandResult:
-    if phase not in {"build", "test", "acceptance", "preview", "migrate"}:
+    if phase not in {"build", "test", "acceptance", "preview", "migrate", "regression"}:
         raise SandboxError("请求了未授权的容器命令。")
     workspace = workspace_for(run_id)
     if not workspace.exists() or workspace.is_symlink():
@@ -287,7 +287,7 @@ def run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: P
     if not SECCOMP_PROFILE.is_file():
         raise SandboxError("Playwright 安全配置缺失。")
     fixed_script = "if [ ! -L node_modules ]; then ln -s /opt/worker/node_modules node_modules; fi; "
-    fixed_script += 'if [ "$PHASE" = build ]; then npm run build; elif [ "$PHASE" = preview ]; then ./node_modules/.bin/playwright test tests/preview.spec.ts --reporter=line; elif [ "$PHASE" = acceptance ]; then ./node_modules/.bin/playwright test tests/acceptance.spec.ts --reporter=line; else npm run test:e2e; fi'
+    fixed_script += 'if [ "$PHASE" = build ]; then npm run build; elif [ "$PHASE" = preview ]; then ./node_modules/.bin/playwright test tests/preview.spec.ts --reporter=line; elif [ "$PHASE" = acceptance ]; then ./node_modules/.bin/playwright test tests/acceptance.spec.ts --reporter=line; elif [ "$PHASE" = regression ]; then ./node_modules/.bin/playwright test --reporter=line,json; else npm run test:e2e; fi'
     from . import fullstack
     is_fullstack=fullstack.application_type(run_id)=='fullstack_crud'
     if phase=='migrate' and not is_fullstack:raise SandboxError('前端项目没有业务迁移命令。')
@@ -310,7 +310,7 @@ def run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: P
         "--workdir=/workspace", "--user=pwuser", "--env", "HOME=/tmp/worker-home",
         "--env", "PYTHONPYCACHEPREFIX=/tmp/pa-pycache", "--env", "PYTHONDONTWRITEBYTECODE=1",
         "--env", "npm_config_cache=/tmp/npm-cache", "--env", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
-        "--env", f"PHASE={phase}", "--entrypoint=/bin/bash", fullstack.IMAGE if is_fullstack else WORKER_IMAGE,
+        "--env", "PLAYWRIGHT_JSON_OUTPUT_NAME=test-results/pa-regression.json", "--env", f"PHASE={phase}", "--entrypoint=/bin/bash", fullstack.IMAGE if is_fullstack else WORKER_IMAGE,
         "-lc", fixed_script,
     ]
     if is_fullstack:

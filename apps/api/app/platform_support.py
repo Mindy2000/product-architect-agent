@@ -20,7 +20,7 @@ def kill_process_group(process):
     process.wait()
 
 @contextmanager
-def exclusive_file(stream,timeout=60):
+def exclusive_file(stream,timeout=60,cancelled=None):
     if os.name=='nt':
         import msvcrt
         stream.seek(0,2)
@@ -33,6 +33,7 @@ def exclusive_file(stream,timeout=60):
         def release():fcntl.flock(stream,fcntl.LOCK_UN)
     deadline=time.monotonic()+timeout
     while True:
+        if cancelled and cancelled():raise InterruptedError('operation cancelled')
         try:acquire();break
         except OSError:
             if time.monotonic()>=deadline:raise TimeoutError('local document worker busy')

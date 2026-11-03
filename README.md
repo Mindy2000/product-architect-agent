@@ -46,7 +46,7 @@ Windows使用`py -3.13`替代`python3.13`。升级副本包含原`.env`、费用
 
 GitHub Actions分别在macOS和Windows构建，包含安装器回归、API启动、前端类型检查/构建、白名单打包、DMG/EXE及SHA256生成。上传与package.json匹配的`v<版本>`标签后，只生成**Release草稿**，需维护者审阅再公开。手动触发只保留Actions产物，不自动发布。
 
-源码ZIP和安装ZIP只包含白名单工程文件；排除.env、用户data/outputs/generated-projects、.git、node_modules、虚拟环境、个人协作记录和本地实验报告。本项目使用[MIT许可证](LICENSE)，第三方组件保留各自许可，见[第三方声明](THIRD_PARTY_NOTICES.md)。发布前仍需核对仓库内容与历史。
+源码ZIP和安装ZIP只包含白名单工程文件；排除.env、用户data/outputs/generated-projects、.git、node_modules、虚拟环境、个人协作记录和本地实验报告。本项目使用[MIT许可证](../LICENSE)，第三方组件保留各自许可，见[第三方声明](../THIRD_PARTY_NOTICES.md)。发布前仍需核对仓库内容与历史。
 
 没有GitHub账号登录功能；使用GitHub下载不意味着模型服务免费。第三方包使用其各自许可证；Windows安装器采用免费的NSIS编译器。
 
@@ -67,3 +67,7 @@ GitHub Actions分别在macOS和Windows构建，包含安装器回归、API启动
 - **集中脱敏诊断**：先预览，再下载相同快照。只导出系统/依赖版本、配置布尔状态和任务状态计数；不含Key、安装路径、需求、文档、源码或原始日志，不自动上传。
 
 工作台备份限制512MiB、单文件128MiB，恢复要求相同应用版本。上传预览24小时有效，可重新校验或移除；诊断预览10分钟有效。恢复会在当前工作台旁的 `<当前工作台目录名>-restored/<UUID>` 创建独立工作台，当前目录保留；新副本密钥为空、模型调用关闭、旧费用保留。停止旧工作台，在新目录运行安装入口，再配置和启动；恢复本身不执行生成代码或调用模型。
+
+## 0.3 持续维护
+
+新增离线完整流程 CI、0.2→0.3 工作台兼容恢复、可取消维护任务、父子版本回归比较和 Dify 离线故障检查。见 [操作与边界](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/OFFLINE_QUALITY_AND_MAINTENANCE.md)。真实模型任务和 Windows 完整 Docker 验证仍暂缓，不代表已完成。

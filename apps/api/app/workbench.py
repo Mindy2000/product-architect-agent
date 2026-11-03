@@ -6,31 +6,34 @@ from pathlib import Path
 from fastapi import APIRouter,HTTPException,Request
 from fastapi.responses import FileResponse,JSONResponse
 from pydantic import BaseModel,ConfigDict,Field
-from . import runner,workbench_archive as archive
+from . import runner,workbench_archive as archive,workbench_jobs as jobs
 from .process_control import run_bounded
 from .security_policy import redact
 router=APIRouter(prefix='/api/v1/workbench')
 
 class MaintenanceMiddleware:
- """Drain existing requests, then prevent new work while making a cross-DB snapshot."""
- def __init__(self,app):self.app=app;self.active=0;self.exclusive=False
+ def __init__(self,app):self.app=app
+ @property
+ def exclusive(self):return bool(jobs.gate.owner)
  async def __call__(self,scope,receive,send):
   if scope['type']!='http':return await self.app(scope,receive,send)
-  exclusive=scope['method']=='POST' and scope['path'] in {'/api/v1/workbench/backups/export','/api/v1/workbench/backups/restore'}
-  if self.exclusive:
-   return await JSONResponse(status_code=503,content={'detail':'工作台正在创建或恢复备份，请完成后重试。'},headers={'Retry-After':'2'})(scope,receive,send)
+  path=scope['path'];method=scope['method']
+  control=path.startswith('/api/v1/workbench/jobs') and (method=='GET' or path.endswith('/cancel'))
+  if control:return await self.app(scope,receive,send)
+  exclusive=method=='POST' and path in {'/api/v1/workbench/backups/export','/api/v1/workbench/backups/restore'}
+  owner='request-'+uuid.uuid4().hex
   if exclusive:
-   self.exclusive=True
+   if not jobs.gate.reserve(owner):return await JSONResponse(status_code=503,content={'detail':'维护操作进行中，请完成后重试。'},headers={'Retry-After':'2'})(scope,receive,send)
    try:
     deadline=time.monotonic()+5
-    while self.active:
-     if time.monotonic()>deadline:return await JSONResponse(status_code=409,content={'detail':'仍有本地操作未结束，请稍后备份。'})(scope,receive,send)
+    while jobs.gate.active:
+     if time.monotonic()>deadline:return await JSONResponse(status_code=409,content={'detail':'仍有本地操作未结束，请稍后再试。'})(scope,receive,send)
      await asyncio.sleep(.05)
     return await self.app(scope,receive,send)
-   finally:self.exclusive=False
-  self.active+=1
+   finally:jobs.gate.release(owner)
+  if not jobs.gate.enter():return await JSONResponse(status_code=503,content={'detail':'维护操作进行中，可继续查看进度或取消。'},headers={'Retry-After':'2'})(scope,receive,send)
   try:return await self.app(scope,receive,send)
-  finally:self.active-=1
+  finally:jobs.gate.leave()
 
 class Contract(BaseModel):model_config=ConfigDict(extra='forbid')
 class Confirmation(Contract):token:uuid.UUID;confirmed:bool=False
@@ -159,7 +162,7 @@ async def preview_backup(request:Request):
     stream.write(chunk)
   manifest=await asyncio.to_thread(archive.inspect,path,archive.version(root()))
   # Raw paths may contain document names; preview shows only categories and totals.
-  return {'token':token,'version':manifest['app_version'],'file_count':len(manifest['files']),'bytes':sum(e['bytes'] for e in manifest['files']),'credentials_included':False,'compatible':True,'excluded':archive.EXCLUSIONS,'expires_in_seconds':86400,'message':'校验通过。恢复将创建独立工作台副本；原目录保留，新副本密钥为空、模型调用关闭。'}
+  return {'token':token,'version':manifest['app_version'],'file_count':len(manifest['files']),'bytes':sum(e['bytes'] for e in manifest['files']),'credentials_included':False,'compatible':True,'compatibility':manifest['compatibility'],'archive_sha256':archive.file_sha(path),'excluded':archive.EXCLUSIONS,'expires_in_seconds':86400,'message':'校验通过。恢复将创建独立工作台副本；原目录保留，新副本密钥为空、模型调用关闭。'}
  except BaseException:path.unlink(missing_ok=True);raise
 
 @router.get('/backups/previews')
@@ -177,7 +180,7 @@ def recheck_backup(token:uuid.UUID):
  path=archive.safe_path(root(),'data/workbench/incoming/'+str(token)+'.zip')
  if not path.is_file() or time.time()-path.stat().st_mtime>86400:raise HTTPException(409,'预览已过期，请移除暂存并重新选择备份。')
  manifest=archive.inspect(path,archive.version(root()))
- return {'token':str(token),'version':manifest['app_version'],'file_count':len(manifest['files']),'bytes':sum(e['bytes'] for e in manifest['files']),'compatible':True,'credentials_included':False,'message':'校验通过。恢复将创建独立工作台副本；原目录保留，新副本密钥为空、模型调用关闭。'}
+ return {'token':str(token),'version':manifest['app_version'],'file_count':len(manifest['files']),'bytes':sum(e['bytes'] for e in manifest['files']),'compatible':True,'compatibility':manifest['compatibility'],'archive_sha256':archive.file_sha(path),'credentials_included':False,'message':'校验通过。恢复将创建独立工作台副本；原目录保留，新副本密钥为空、模型调用关闭。'}
 
 @router.delete('/backups/preview/{token}')
 def discard_preview(token:uuid.UUID):
@@ -235,3 +238,59 @@ def download_diagnostic(token:uuid.UUID):
  target.chmod(0o600)
  from starlette.background import BackgroundTask
  return FileResponse(target,filename='product-architect-diagnostics.zip',media_type='application/zip',background=BackgroundTask(target.unlink,missing_ok=True))
+
+
+class JobRequest(Contract):
+ kind:str=Field(pattern=r'^(backup|restore|regression)$')
+ token:uuid.UUID|None=None
+ run_id:uuid.UUID|None=None
+ confirmed:bool=False
+ expected_sha256:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
+
+@router.get('/jobs')
+def maintenance_jobs():return {'items':jobs.recent(root())}
+
+@router.get('/jobs/{identifier}')
+def maintenance_job(identifier:uuid.UUID):
+ result=jobs.read(root(),identifier)
+ if result is None:raise HTTPException(404,'维护任务不存在。')
+ return result
+
+@router.post('/jobs/{identifier}/cancel')
+def cancel_maintenance_job(identifier:uuid.UUID):return jobs.cancel(root(),identifier)
+
+@router.post('/jobs')
+def start_maintenance_job(payload:JobRequest):
+ base=root()
+ if payload.kind=='restore' and (not payload.token or not payload.confirmed):raise HTTPException(422,'请选择备份并明确确认恢复。')
+ if payload.kind=='regression' and not payload.run_id:raise HTTPException(422,'请选择需要回归检查的项目版本。')
+ def operation(identifier,progress,cancelled):
+  ensure_idle()
+  if payload.kind=='backup':
+   artifacts=jobs.folder(base)/'artifacts';artifacts.mkdir(exist_ok=True,mode=0o700)
+   if sum(p.stat().st_size for p in artifacts.glob('*.zip') if p.is_file() and not p.is_symlink())+archive.LIMIT>archive.LIMIT*2:raise archive.ArchiveError('已完成的维护备份占用较多空间，请先下载并移除旧任务产物。')
+   target=artifacts/(identifier+'.zip');manifest=archive.create(base,target,progress,cancelled)
+   return {'file_count':len(manifest['files']),'download':'/api/v1/workbench/jobs/'+identifier+'/download'}
+  if payload.kind=='restore':
+   path=archive.safe_path(base,'data/workbench/incoming/'+str(payload.token)+'.zip')
+   if not path.is_file() or time.time()-path.stat().st_mtime>86400:raise archive.ArchiveError('备份预览已过期，请重新选择。')
+   if payload.expected_sha256 and archive.file_sha(path)!=payload.expected_sha256:raise archive.ArchiveError('备份已变化，请重新预览确认。')
+   return archive.restore(base,path,payload.token,progress,cancelled)
+  from .regression import execute_job
+  return execute_job(base,str(payload.run_id),identifier,progress,cancelled)
+ return jobs.start(base,payload.kind,payload.model_dump(mode='json'),operation)
+
+@router.get('/jobs/{identifier}/download')
+def download_job(identifier:uuid.UUID):
+ state=maintenance_job(identifier)
+ if state['kind']!='backup' or state['status']!='completed':raise HTTPException(409,'备份尚未完成。')
+ path=archive.safe_path(root(),'data/workbench/jobs/artifacts/'+str(identifier)+'.zip')
+ if not path.is_file():raise HTTPException(410,'此任务的备份产物已移除。')
+ return FileResponse(path,filename='product-architect-workbench-backup.zip',media_type='application/zip')
+
+@router.delete('/jobs/{identifier}/artifact')
+def discard_job_artifact(identifier:uuid.UUID):
+ state=maintenance_job(identifier)
+ if state['status'] not in jobs.TERMINAL:raise HTTPException(409,'请先等待任务结束。')
+ path=archive.safe_path(root(),'data/workbench/jobs/artifacts/'+str(identifier)+'.zip');path.unlink(missing_ok=True)
+ return {'removed':True,'source_data_preserved':True}
