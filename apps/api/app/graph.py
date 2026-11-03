@@ -91,12 +91,15 @@ def _merge_persisted_trace(run_id: str, _base: list[dict], candidate: list[dict]
 def build_graph(checkpoint_path: Path | None = None):
     from langgraph.graph import END, START, StateGraph
     from langgraph.checkpoint.sqlite import SqliteSaver
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
     import sqlite3
 
     db_path = checkpoint_path or Path(__file__).resolve().parents[3] / "data" / "checkpoints.sqlite3"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(str(db_path), check_same_thread=False, timeout=20)
-    checkpointer = SqliteSaver(connection)
+    serializer = JsonPlusSerializer(pickle_fallback=False, allowed_msgpack_modules=None, allowed_json_modules=None)
+    checkpointer = SqliteSaver(connection, serde=serializer)
+    checkpointer.jsonplus_serde = serializer
     checkpointer.setup()
     graph = StateGraph(RunState)
 

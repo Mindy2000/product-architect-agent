@@ -192,4 +192,19 @@ class MaintenanceTests(unittest.TestCase):
    finish.set();await first;await backup;self.assertIn('/api/v1/workbench/backups/export',calls);self.assertFalse(middleware.exclusive)
   asyncio.run(scenario())
 
+class CheckpointSafetyTests(unittest.TestCase):
+ def test_restored_checkpoint_cannot_invoke_an_arbitrary_python_callable(self):
+  import ormsgpack
+  from app import graph
+  from langgraph.checkpoint.serde.jsonplus import EXT_CONSTRUCTOR_SINGLE_ARG
+  with tempfile.TemporaryDirectory() as tmp:
+   workflow=graph.build_graph(Path(tmp)/'checkpoint.sqlite3')
+   try:
+    payload=ormsgpack.packb(ormsgpack.Ext(EXT_CONSTRUCTOR_SINGLE_ARG,ormsgpack.packb(('os','system','synthetic-never-execute'))))
+    with patch('os.system') as command:
+     self.assertEqual(workflow.checkpointer.serde.loads_typed(('msgpack',payload)),'synthetic-never-execute')
+     command.assert_not_called()
+    with self.assertRaises(NotImplementedError):workflow.checkpointer.serde.loads_typed(('pickle',b'not accepted'))
+   finally:workflow.checkpointer.conn.close()
+
 if __name__=='__main__':unittest.main()
