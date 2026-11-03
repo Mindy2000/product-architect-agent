@@ -1,0 +1,118 @@
+name: Build installation packages
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      PYTHONUTF8: '1'
+      MODEL_CALLS_ENABLED: 'false'
+      VISION_CALLS_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Check tag matches package version
+        shell: python
+        run: |
+          import json,os
+          version=json.load(open('package.json'))['version']
+          if os.environ['GITHUB_REF'].startswith('refs/tags/'):
+              assert os.environ['GITHUB_REF_NAME']=='v'+version, 'Tag must match package.json'
+      - name: Install locked application dependencies
+        run: python -m pip install --no-cache-dir -r requirements.lock
+      - name: Installer regressions
+        run: python -m unittest discover -s tests -p test_distribution.py -v
+      - name: Portable process and worker locks
+        run: python -m unittest discover -s tests -p test_platform_support.py -v
+      - name: Windows-compatible API startup (no Docker task or model request)
+        shell: python
+        run: |
+          import subprocess,sys,time,urllib.request
+          child=subprocess.Popen([sys.executable,'-m','uvicorn','app.main:app','--app-dir','apps/api','--host','127.0.0.1','--port','8000','--no-proxy-headers','--no-access-log'])
+          try:
+              ready=False
+              for _ in range(40):
+                  if child.poll() is not None:break
+                  try:
+                      with urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=1) as response:ready=response.status==200
+                  except OSError:time.sleep(.5)
+                  if ready:break
+              assert ready,'API startup failed'
+          finally:
+              child.terminate()
+              try:child.wait(timeout=15)
+              except subprocess.TimeoutExpired:child.kill();child.wait()
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm --workspace apps/web run typecheck
+      - run: npm --workspace apps/web run build
+      - name: Source distribution
+        if: runner.os == 'macOS'
+        run: python scripts/manage.py package --kind source
+      - name: macOS payload
+        if: runner.os == 'macOS'
+        run: python scripts/manage.py package --kind macos-install
+      - name: macOS disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          version=$(python -c 'import json; print(json.load(open("package.json"))["version"])')
+          python scripts/package_native.py "release-artifacts/product-architect-${version}-macos-install.zip" --kind macos
+      - name: Windows payload
+        if: runner.os == 'Windows'
+        run: python scripts/manage.py package --kind windows-install
+      - name: Install free NSIS compiler
+        if: runner.os == 'Windows'
+        run: choco install nsis --version=3.13 --yes --no-progress
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH += ';C:\Program Files (x86)\NSIS'
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          python scripts/package_native.py "release-artifacts/product-architect-$version-windows-install.zip" --kind windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: python scripts/release_checksums.py release-artifacts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installers-${{ runner.os }}
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+  draft-release:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts and create a draft only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GH_REPO" --dir packages
+          printf '%s\n' '源码、macOS DMG、Windows EXE及带校验清单的安装ZIP。' '首次使用需Python 3.13、Git，以及对应平台的Linux容器环境。' '包未进行付费代码签名或公证。请审阅许可、两平台CI结果和资产后再公开发布。' > release-notes.txt
+          gh release create "$TAG" --repo "$GH_REPO" --draft --title "Product Architect $TAG" --notes-file release-notes.txt
+          find packages -type f \( -name '*.zip' -o -name '*.dmg' -o -name '*.exe' -o -name 'SHA256SUMS.txt' \) -print0 | while IFS= read -r -d '' file; do
+            name="$(basename "$(dirname "$file")")-$(basename "$file")"
+            cp "$file" "$name"
+            gh release upload "$TAG" "$name" --repo "$GH_REPO"
+          done
