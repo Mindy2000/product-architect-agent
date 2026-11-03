@@ -203,14 +203,20 @@ def stop(root=ROOT):
             if name=='api':
                 process.send_signal(signal.CTRL_BREAK_EVENT)
                 try:process.wait(timeout=20)
-                except psutil.TimeoutExpired:process.terminate()
-            else:process.terminate()
+                except psutil.TimeoutExpired:process.terminate();process.wait(timeout=10)
+            else:process.terminate();process.wait(timeout=10)
             continue
         cwd=capture(['lsof','-a','-p',str(pid),'-d','cwd','-Fn']);cmd=capture(['ps','-p',str(pid),'-o','command='])
         if not cmd:continue
         if not cwd or ('n'+str(root)) not in cwd.splitlines() or not any(marker in cmd for marker in ['uvicorn app.main:app','scripts/manage.py serve','node_modules/.bin/vite']):raise DistributionError('记录的进程不属于此项目，未停止。')
         os.kill(pid,signal.SIGTERM)
-    return {'stopping':True,'data_preserved':True}
+        deadline=time.monotonic()+30
+        while True:
+            state=capture(['ps','-p',str(pid),'-o','stat='])
+            if not state or state.startswith('Z'):break
+            if time.monotonic()>=deadline:raise DistributionError('服务仍在停止，请等待当前处理完成后再启动；未强制终止或删除数据。')
+            time.sleep(.1)
+    return {'stopped':True,'data_preserved':True}
 
 def main():
     parser=argparse.ArgumentParser(description='Product Architect 本地安装与维护')

@@ -1,5 +1,5 @@
 """Portable installer regressions: standard library only, exclusively synthetic roots."""
-import hashlib,http.client,http.server,io,json,os,sqlite3,sys,tempfile,threading,unittest,zipfile
+import hashlib,http.client,http.server,io,json,os,sqlite3,sys,tempfile,threading,unittest,zipfile,subprocess,time
 from pathlib import Path
 from contextlib import closing
 from unittest.mock import patch
@@ -123,3 +123,18 @@ class StaticServerTests(unittest.TestCase):
    finally:server.shutdown();server.server_close();thread.join()
 
 if __name__=='__main__':unittest.main()
+
+
+@unittest.skipIf(os.name=='nt','POSIX launcher shutdown uses ps/lsof')
+class StopLifecycleTests(Fixture):
+ def test_stop_waits_for_owned_launcher_to_release_resources(self):
+  script=self.root/'scripts/manage.py'
+  script.write_text("import signal,time,sys\nfrom pathlib import Path\ndef stop(*args):\n time.sleep(.3)\n sys.exit(0)\nsignal.signal(signal.SIGTERM,stop)\nPath('ready').touch()\nwhile True:time.sleep(.1)\n")
+  child=subprocess.Popen([sys.executable,str(script),'serve'],cwd=self.root)
+  self.addCleanup(lambda:child.poll() is None and child.kill())
+  deadline=time.monotonic()+5
+  while not (self.root/'ready').exists() and time.monotonic()<deadline:time.sleep(.01)
+  self.assertTrue((self.root/'ready').exists())
+  (self.root/'data').mkdir();(self.root/'data/web.pid').write_text(str(child.pid))
+  result=manage.stop(self.root)
+  self.assertTrue(result['stopped']);self.assertIsNotNone(child.poll())
