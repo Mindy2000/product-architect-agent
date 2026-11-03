@@ -159,14 +159,14 @@ def ensure_idle(root):
                 raise DistributionError('请先停止源目录的服务，再进行升级复制。')
     path=root/'data/runs.sqlite3'
     if path.is_file():
-        with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True) as conn:
+        with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as conn:
             for (raw,) in conn.execute('SELECT state FROM runs'):
                 if json.loads(raw).get('status') not in TERMINAL:raise DistributionError('仍有活动任务，请先暂停或取消。')
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='product_designs'").fetchone():
                 if conn.execute("SELECT 1 FROM product_designs WHERE json_extract(state,'$.status')='generating' LIMIT 1").fetchone():raise DistributionError('仍有方案正在生成。')
     path=root/'data/knowledge/library.sqlite3'
     if path.is_file():
-        with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True) as conn:
+        with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as conn:
             if conn.execute("SELECT 1 FROM documents WHERE status IN ('uploading','queued','parsing','chunking','indexing') LIMIT 1").fetchone():raise DistributionError('仍有文档在处理。')
 
 def user_files(root):

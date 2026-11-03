@@ -1,6 +1,7 @@
 """Portable installer regressions: standard library only, exclusively synthetic roots."""
 import hashlib,http.client,http.server,io,json,os,sqlite3,sys,tempfile,threading,unittest,zipfile
 from pathlib import Path
+from contextlib import closing
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import distribution as d
@@ -62,11 +63,11 @@ class DistributionTests(Fixture):
   plan=d.upgrade(self.root,package,dest);self.assertFalse(plan['applied']);self.assertFalse(dest.exists());self.assertEqual((data/'record.txt').read_text(),'preserved')
  def test_side_by_side_upgrade_preserves_keys_sqlite_and_source(self):
   data=self.root/'data';data.mkdir();(self.root/'.env').write_text('MODEL_API_KEY=synthetic-private-key-abc\n')
-  with sqlite3.connect(data/'sample.sqlite3') as conn:conn.execute('CREATE TABLE sample(value TEXT)');conn.execute("INSERT INTO sample VALUES ('unchanged')")
+  with closing(sqlite3.connect(data/'sample.sqlite3')) as conn,conn:conn.execute('CREATE TABLE sample(value TEXT)');conn.execute("INSERT INTO sample VALUES ('unchanged')")
   workspace=self.root/'generated-projects/fixture';workspace.mkdir(parents=True);workspace.chmod(0o777);(workspace/'source.txt').write_text('old source');(workspace/'source.txt').chmod(0o666)
   original=(data/'sample.sqlite3').read_bytes();package=self.package();dest=self.base/'new';result=d.upgrade(self.root,package,dest,True)
   self.assertTrue(result['applied']);self.assertEqual((dest/'.env').read_bytes(),(self.root/'.env').read_bytes());self.assertEqual((data/'sample.sqlite3').read_bytes(),original)
-  with sqlite3.connect(dest/'data/sample.sqlite3') as conn:self.assertEqual(conn.execute('SELECT value FROM sample').fetchone()[0],'unchanged')
+  with closing(sqlite3.connect(dest/'data/sample.sqlite3')) as conn:self.assertEqual(conn.execute('SELECT value FROM sample').fetchone()[0],'unchanged')
   (dest/'generated-projects/fixture/source.txt').write_text('new source');self.assertEqual((workspace/'source.txt').read_text(),'old source')
   if os.name!='nt':self.assertEqual((dest/'generated-projects/fixture/source.txt').stat().st_mode&0o777,0o666)
  def test_upgrade_refuses_live_process_and_low_disk(self):
