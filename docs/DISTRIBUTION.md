@@ -7,7 +7,7 @@
 GitHub仓库提供两条路径：
 
 - **源码**：克隆仓库或下载Source code ZIP，按docs/SETUP.md安装。
-- **安装包**：首个版本尚待自动构建；安装包就绪后，从GitHub Releases下载macOS `.dmg`或Windows x64 `.exe`。同时提供带SHA256清单的安装ZIP，便于校验和并排升级。
+- **安装包**：正式 Release 尚未发布；发布后，从GitHub Releases下载macOS `.dmg`或Windows x64 `.exe`。同时提供带SHA256清单的安装ZIP，便于校验和并排升级。
 
 安装包包含应用源码、预构建中文界面和安装启动入口。它是轻量本地安装器：首次使用仍需要Python 3.13、Git和Linux容器环境，并联网安装锁定的Python依赖。它不会把多GB Docker镜像、系统Python、API Key或用户项目塞进软件包。预构建安装包不要求宿主Node；从源码构建界面需要Node.js 24。
 
