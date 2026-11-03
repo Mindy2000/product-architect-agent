@@ -1,6 +1,6 @@
 """Standard-library-only, allowlisted releases and side-by-side local upgrades."""
 from __future__ import annotations
-import hashlib,json,os,re,shutil,sqlite3,stat,subprocess,tempfile,uuid,zipfile
+import hashlib,json,os,re,shutil,sqlite3,stat,subprocess,tempfile,uuid,zipfile,importlib.util
 from pathlib import Path,PurePosixPath
 from contextlib import closing
 
@@ -8,6 +8,8 @@ PRODUCT='product-architect-agent'
 FORMAT=1
 LIMIT=64*1024*1024
 ROOT=Path(__file__).resolve().parents[1]
+_spec=importlib.util.spec_from_file_location('pa_release_policy',ROOT/'apps/api/app/release_policy.py');_policy=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(_policy)
+compatibility=_policy.compatibility
 PUBLIC_DOCS={'SETUP.md','DISTRIBUTION.md','WORKBENCH_MAINTENANCE.md','OFFLINE_QUALITY_AND_MAINTENANCE.md'}
 BENCHMARKS={name+'.spec.ts' for name in ('todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1')}
 ROOT_FILES={'README.md','.env.example','.gitignore','.gitattributes','package.json','package-lock.json','requirements.txt','requirements.lock','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md'}
@@ -196,13 +198,15 @@ def user_files(root):
 
 def upgrade(root,package,destination,apply=False):
     root=Path(root).resolve();destination=Path(destination).absolute();manifest=inspect(package)
+    policy=compatibility(json.loads((root/'package.json').read_text())['version'],manifest['version'])
+    if not policy['compatible']:raise DistributionError('此版本组合未登记兼容迁移；未知升级或降级需要先决定迁移方案，未修改原目录。')
     if destination==root or root in destination.parents or destination in root.parents:raise DistributionError('新版本必须放在源目录外的独立位置。')
     if destination.exists() or destination.is_symlink():raise DistributionError('升级目标必须是新目录。')
     ensure_idle(root);files=user_files(root);total=sum(p.stat().st_size for p in files)
     ancestor=destination.parent
     while not ancestor.exists():ancestor=ancestor.parent
     if shutil.disk_usage(ancestor).free<total+LIMIT+256*1024*1024:raise DistributionError('空间不足以保留旧版并复制数据，请先整理。')
-    report={'version':manifest['version'],'destination':str(destination),'source':str(root),'copy_bytes':total,'source_preserved':True,'applied':False,'credentials_included_in_private_local_copy':(root/'.env').is_file()}
+    report={'compatibility':policy,'version':manifest['version'],'destination':str(destination),'source':str(root),'copy_bytes':total,'source_preserved':True,'applied':False,'credentials_included_in_private_local_copy':(root/'.env').is_file()}
     if not apply:return report
     # Same-volume staging means a failed copy never becomes a published new installation.
     destination.parent.mkdir(parents=True,exist_ok=True);stage=destination.parent/('.pa-upgrade-'+uuid.uuid4().hex)
@@ -217,7 +221,15 @@ def upgrade(root,package,destination,apply=False):
                 with closing(sqlite3.connect(source.as_uri()+'?mode=ro',uri=True)) as old,closing(sqlite3.connect(target)) as new:old.backup(new)
             else:shutil.copyfile(source,target)
             target.chmod(0o600 if source.name=='.env' else stat.S_IMODE(source.stat().st_mode)&0o777)
-        receipt={'source':str(root),'destination':str(destination),'version':manifest['version'],'policy':'old_directory_preserved_no_automatic_data_rollback'}
+        migration_backup=None
+        db=stage/'data/knowledge/library.sqlite3'
+        if policy['migration_required'] and db.is_file():
+            backup=stage/'data/upgrade-pre-migration/library.sqlite3';backup.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+            with closing(sqlite3.connect(db)) as old,closing(sqlite3.connect(backup)) as saved:old.backup(saved)
+            backup.chmod(0o600);migration_backup='data/upgrade-pre-migration/library.sqlite3'
+            with closing(sqlite3.connect(db)) as conn:
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone() and 'cancel_requested' not in {r[1] for r in conn.execute('PRAGMA table_info(jobs)')}:conn.execute('ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0');conn.commit()
+        receipt={'compatibility':policy,'pre_migration_database':migration_backup,'source':str(root),'destination':str(destination),'version':manifest['version'],'policy':'old_directory_preserved_no_automatic_data_rollback'}
         state=stage/'data';state.mkdir(exist_ok=True,mode=0o700);(state/'upgrade-receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2));(state/'upgrade-receipt.json').chmod(0o600)
         os.rename(stage,destination)
     except BaseException:shutil.rmtree(stage,ignore_errors=True);raise

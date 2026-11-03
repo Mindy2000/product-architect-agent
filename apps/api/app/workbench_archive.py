@@ -19,11 +19,7 @@ def checkpoint(progress=None,cancelled=None,phase='',done=0,total=1):
  if cancelled and cancelled():raise OperationCancelled('操作已取消；原工作台和原备份保留。')
  if progress:progress(phase,done,max(total,1))
 
-def compatibility(source,target):
- if source==target:return {'compatible':True,'source_version':source,'target_version':target,'migration_required':False,'steps':[],'destructive':False}
- if (source,target)==('0.2.0','0.3.0'):
-  return {'compatible':True,'source_version':source,'target_version':target,'migration_required':True,'destructive':False,'steps':['保留全部项目、检查点、知识库与费用记录','新增文档任务取消字段，不删除或改写已有字段','保留一份迁移前原始备份','新副本保持密钥为空、模型调用关闭']}
- return {'compatible':False,'source_version':source,'target_version':target,'migration_required':False,'destructive':False,'steps':[],'requires_user_decision':True}
+from .release_policy import compatibility
 
 
 def sha(raw):return hashlib.sha256(raw).hexdigest()

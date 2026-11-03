@@ -24,6 +24,17 @@ class MigrationTests(Fixture):
   with closing(sqlite3.connect(target/'data/knowledge/library.sqlite3')) as c:self.assertEqual(c.execute('SELECT id,status,cancel_requested FROM jobs').fetchone(),('old','completed',0))
   with closing(sqlite3.connect(self.root/'data/knowledge/library.sqlite3')) as c:self.assertNotIn('cancel_requested',[r[1] for r in c.execute('PRAGMA table_info(jobs)')])
   self.assertEqual(path.read_bytes(),raw);self.assertIn('MODEL_CALLS_ENABLED=false',(target/'.env').read_text())
+ def test_local_upgrade_uses_same_policy_and_saves_database_before_migration(self):
+  self.old_archive();builder=a.distribution(self.root);package=builder.build(self.root,self.root/'package',kind='source');(self.root/'package.json').write_text(json.dumps({'version':'0.2.0'}));target=self.root.parent/'upgraded'
+  plan=builder.upgrade(self.root,package,target);self.assertTrue(plan['compatibility']['migration_required']);self.assertFalse(target.exists())
+  result=builder.upgrade(self.root,package,target,True);self.assertTrue(result['applied'])
+  with closing(sqlite3.connect(target/'data/upgrade-pre-migration/library.sqlite3')) as c:self.assertNotIn('cancel_requested',[r[1] for r in c.execute('PRAGMA table_info(jobs)')]);self.assertEqual(c.execute('SELECT id FROM jobs').fetchone()[0],'old')
+  with closing(sqlite3.connect(target/'data/knowledge/library.sqlite3')) as c:self.assertEqual(c.execute('SELECT cancel_requested FROM jobs').fetchone()[0],0)
+  with closing(sqlite3.connect(self.root/'data/knowledge/library.sqlite3')) as c:self.assertNotIn('cancel_requested',[r[1] for r in c.execute('PRAGMA table_info(jobs)')])
+ def test_local_upgrade_unknown_version_refuses_before_copy(self):
+  builder=a.distribution(self.root);package=builder.build(self.root,self.root/'package',kind='source');(self.root/'package.json').write_text(json.dumps({'version':'0.1.0'}));target=self.root.parent/'unknown'
+  with self.assertRaises(builder.DistributionError):builder.upgrade(self.root,package,target,True)
+  self.assertFalse(target.exists())
  def test_unknown_or_downgrade_needs_decision(self):
   for source,target in [('0.3.0','0.2.0'),('0.1.0','0.3.0'),('9.0.0','0.3.0')]:
    result=a.compatibility(source,target);self.assertFalse(result['compatible']);self.assertTrue(result['requires_user_decision'])

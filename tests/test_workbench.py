@@ -12,7 +12,7 @@ PROJECT=Path(__file__).resolve().parents[1]
 class Fixture(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)/'source';self.root.mkdir();self.id=str(uuid.uuid4())
-  for name in ['scripts/distribution.py','scripts/manage.py','.env.example','requirements.lock','package.json']:
+  for name in ['scripts/distribution.py','apps/api/app/release_policy.py','scripts/manage.py','.env.example','requirements.lock','package.json']:
    dest=self.root/name;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(PROJECT/name,dest)
   self.secret='synthetic-key-DO-NOT-EXPORT-abcdef'
   (self.root/'.env').write_text('MODEL_API_KEY='+self.secret+'\nMODEL_CALLS_ENABLED=true\nMODEL_BUDGET_CNY=17\nRAG_API_KEY=synthetic-rag-secret-12345\n')
