@@ -84,7 +84,7 @@ class ArchiveTests(Fixture):
     if kind=='duplicate':
      import warnings
      with warnings.catch_warnings():warnings.simplefilter('ignore');z.writestr('settings.json',b'{}')
-   with self.subTest(kind=kind),self.assertRaises(a.ArchiveError):a.inspect(target,'0.1.0')
+   with self.subTest(kind=kind),self.assertRaises(a.ArchiveError):a.inspect(target,a.version(self.root))
  def test_known_configured_key_in_user_data_blocks_export_without_changing_data(self):
   self.write('data/knowledge/raw.txt','private credential '+self.secret)
   with self.assertRaises(a.ArchiveError):self.create()
@@ -118,7 +118,7 @@ class ArchiveTests(Fixture):
   with zipfile.ZipFile(target,'w') as z:
    for name,raw in entries.items():z.writestr(name,raw)
    z.writestr('SETTINGS.JSON',b'{}')
-  with self.assertRaises(a.ArchiveError):a.inspect(target,'0.1.0')
+  with self.assertRaises(a.ArchiveError):a.inspect(target,a.version(self.root))
  def test_space_limit_refuses_backup_without_deleting_source(self):
   with patch.object(a.shutil,'disk_usage',return_value=type('Disk',(),{'free':1})()):
    with self.assertRaises(a.ArchiveError):self.create()
