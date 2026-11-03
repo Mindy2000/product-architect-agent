@@ -169,10 +169,12 @@ def inspect(path,expected_version):
 def distribution(root):
  spec=importlib.util.spec_from_file_location('pa_backup_distribution',root/'scripts/distribution.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
+def restore_home(root):return safe_path(root.parent,root.name+'-restored')
+
 def restore(root,archive_path,token):
  manifest=inspect(archive_path,version(root));ensure_idle(root)
- home=safe_path(root,'data/workbench/restored');home.mkdir(parents=True,exist_ok=True,mode=0o700)
- target=safe_path(root,'data/workbench/restored/'+str(uuid.UUID(str(token))))
+ home=restore_home(root);home.mkdir(parents=True,exist_ok=True,mode=0o700)
+ target=safe_path(root.parent,root.name+'-restored/'+str(uuid.UUID(str(token))))
  if target.exists():
   receipt=safe_path(target,'data/workbench-restore-receipt.json')
   if receipt.is_file() and json.loads(receipt.read_text()).get('archive_sha256')==file_sha(archive_path):return {'location':str(target),'replayed':True,'executed':False,'restart_required':True}

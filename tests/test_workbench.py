@@ -58,7 +58,7 @@ class ArchiveTests(Fixture):
    self.assertIn('data/knowledge/raw.txt',names);self.assertIn('data/applications/'+self.id+'/attachment.txt',names)
  def test_sqlite_wal_rows_and_spend_survive_side_by_side_restore(self):
   path=self.create();result=a.restore(self.root,path,uuid.uuid4());target=Path(result['location'])
-  self.assertFalse(result['executed']);self.assertTrue((self.root/'.env').is_file())
+  self.assertFalse(result['executed']);self.assertTrue((self.root/'.env').is_file());self.assertNotIn(self.root,target.parents)
   with closing(sqlite3.connect(target/'data/runs.sqlite3')) as c:self.assertEqual(json.loads(c.execute('SELECT state FROM runs').fetchone()[0])['user_request'],self.state['user_request'])
   with closing(sqlite3.connect(target/'data/api_usage.sqlite3')) as c:self.assertEqual(c.execute('SELECT cost FROM model_usage').fetchone()[0],1.75)
   env=(target/'.env').read_text();self.assertIn('MODEL_API_KEY=\n',env);self.assertIn('MODEL_CALLS_ENABLED=false',env);self.assertIn('MODEL_BUDGET_CNY=17',env);self.assertNotIn(self.secret,env)
@@ -102,10 +102,10 @@ class ArchiveTests(Fixture):
   path=self.create();token=uuid.uuid4()
   with patch.object(a.os,'rename',side_effect=OSError('synthetic disk failure')):
    with self.assertRaises(OSError):a.restore(self.root,path,token)
-  self.assertFalse((self.root/'data/workbench/restored'/str(token)).exists());self.assertIn(self.secret,(self.root/'.env').read_text())
+  self.assertFalse((a.restore_home(self.root)/str(token)).exists());self.assertIn(self.secret,(self.root/'.env').read_text())
  @unittest.skipIf(os.name=='nt','Creating symlinks may require developer mode')
  def test_symlinked_sqlite_sidecar_and_restore_destination_are_rejected(self):
-  path=self.create();token=uuid.uuid4();directory=self.root/'data/workbench/restored';directory.mkdir(parents=True);(directory/str(token)).symlink_to(self.root/'data',target_is_directory=True)
+  path=self.create();token=uuid.uuid4();directory=a.restore_home(self.root);directory.mkdir(parents=True);(directory/str(token)).symlink_to(self.root/'data',target_is_directory=True)
   with self.assertRaises(a.ArchiveError):a.restore(self.root,path,token)
   fake=self.root/'data/api_usage.sqlite3-wal';fake.symlink_to(self.root/'.env')
   with self.assertRaises(a.ArchiveError):a.query(self.root,'data/api_usage.sqlite3','SELECT * FROM model_usage')
