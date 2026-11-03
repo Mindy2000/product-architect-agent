@@ -28,6 +28,7 @@ class DocumentTests(unittest.TestCase):
         page[NameObject('/Contents')]=writer._add_object(content);out=io.BytesIO();writer.write(out)
         result=document_runtime.extract_document(out.getvalue(),'.pdf');self.assertEqual(result[0]['method'],'pdf_text');self.assertIn('Acceptance Document',result[0]['text'])
     def test_scanned_pdf_runs_free_local_ocr(self):
+        if not document_runtime.capabilities()["enabled"]:self.skipTest("Optional Tesseract and pinned language data are not installed in this source checkout")
         image=Image.new('RGB',(1800,900),'white');draw=ImageDraw.Draw(image);draw.text((100,200),'ACCEPTANCE TASK STORAGE',font=ImageFont.load_default(size=80),fill='black')
         out=io.BytesIO();image.save(out,format='PDF',resolution=150);image.close()
         result=document_runtime.extract_document(out.getvalue(),'.pdf');self.assertEqual(result[0]['method'],'local_ocr');self.assertIn('ACCEPTANCE',result[0]['text'].upper())

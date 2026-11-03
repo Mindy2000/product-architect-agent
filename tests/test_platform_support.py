@@ -31,7 +31,10 @@ class PortableTests(unittest.TestCase):
    pidfile=Path(tmp)/'pid';program='import subprocess,sys;from pathlib import Path;p=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"]);Path(sys.argv[1]).write_text(str(p.pid))'
    with self.assertRaises(subprocess.TimeoutExpired):run_bounded([sys.executable,'-c',program,str(pidfile)],timeout=.4)
    pid=int(pidfile.read_text());deadline=time.monotonic()+2
-   while psutil.pid_exists(pid) and psutil.Process(pid).status()!=psutil.STATUS_ZOMBIE and time.monotonic()<deadline:time.sleep(.05)
-   self.assertTrue(not psutil.pid_exists(pid) or psutil.Process(pid).status()==psutil.STATUS_ZOMBIE)
+   def alive():
+    try:return psutil.Process(pid).status()!=psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:return False
+   while alive() and time.monotonic()<deadline:time.sleep(.05)
+   self.assertFalse(alive())
 
 if __name__=='__main__':unittest.main()
