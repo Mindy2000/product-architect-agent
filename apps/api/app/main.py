@@ -173,7 +173,7 @@ def capabilities():
     settings = _get_settings()
     return {
         "application_types": ["frontend","fullstack_crud"],
-        "business_backend": {"framework":"fastapi","database":"sqlite","generation":"controlled_crud_schema","image_prepared":False,"local_files":True,"data_backup_restore":"independent_copy"},
+        "business_backend": {"framework":"fastapi","database":"sqlite","generation":"controlled_crud_schema","image_prepared":worker_image_available(fullstack.IMAGE),"local_files":True,"data_backup_restore":"independent_copy"},
         "target": {"framework": "react", "language": "typescript", "max_pages": 12, "storage": "by_application_type", "storage_modes":{"frontend":"localStorage","fullstack_crud":"project_sqlite"}},
         "workflow": ["requirements", "planning", "project_setup", "executor", "build", "browser_test", "diagnosis", "repair", "replanning", "delivery"],
         "design_review_required": True,

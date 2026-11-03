@@ -266,9 +266,9 @@ def ensure_worker_image(timeout: int = 3600) -> str:
     return _trim(result.stdout + "\n" + result.stderr)
 
 
-def worker_image_available() -> bool:
+def worker_image_available(image: str = WORKER_IMAGE) -> bool:
     try:
-        result = run_bounded(["docker", "--context", DOCKER_CONTEXT, "image", "inspect", WORKER_IMAGE], timeout=10)
+        result = run_bounded(["docker", "--context", DOCKER_CONTEXT, "image", "inspect", image], timeout=10)
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired, OutputLimitExceeded):
         return False

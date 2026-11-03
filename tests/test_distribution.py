@@ -15,6 +15,14 @@ class Fixture(unittest.TestCase):
  def package(self,kind='macos-install'):return d.build(self.root,self.base/'assets',kind)
 
 class DistributionTests(Fixture):
+ def test_standard_acceptance_suites_are_shipped_and_experiments_excluded(self):
+  directory=self.root/'benchmarks';directory.mkdir()
+  expected={'todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1'}
+  for name in expected|{'private-experiment'}:(directory/(name+'.spec.ts')).write_text('// synthetic suite')
+  for kind in ['source','macos-install','windows-install']:
+   with zipfile.ZipFile(self.package(kind)) as archive:
+    shipped={name for name in archive.namelist() if name.startswith('benchmarks/')}
+    self.assertEqual(shipped,{'benchmarks/'+name+'.spec.ts' for name in expected})
  def test_source_omits_built_frontend(self):
   with zipfile.ZipFile(self.package('source')) as archive:self.assertNotIn('apps/web/dist/index.html',archive.namelist())
  def test_installers_include_built_assets_and_platform(self):

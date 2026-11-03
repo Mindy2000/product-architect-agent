@@ -9,6 +9,7 @@ FORMAT=1
 LIMIT=64*1024*1024
 ROOT=Path(__file__).resolve().parents[1]
 PUBLIC_DOCS={'SETUP.md','DISTRIBUTION.md'}
+BENCHMARKS={name+'.spec.ts' for name in ('todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1')}
 ROOT_FILES={'README.md','.env.example','.gitignore','.gitattributes','package.json','package-lock.json','requirements.txt','requirements.lock','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md'}
 SOURCE_DIRS={'apps/api/app','apps/web/src','templates','runtime','tests','scripts','.github/workflows'}
 WEB_FILES={'apps/web/index.html','apps/web/package.json','apps/web/tsconfig.json','apps/web/vite.config.ts'}
@@ -31,6 +32,7 @@ def public_path(name,kind):
     if any(part.startswith('.env') for part in p.parts):return name=='.env.example'
     if name=='runtime/bootstrap/pip-26.2.2-py3-none-any.whl':return True
     if name in ROOT_FILES|WEB_FILES:return True
+    if p.parts[0]=='benchmarks':return len(p.parts)==2 and p.name in BENCHMARKS
     if p.parts[0]=='docs':return len(p.parts)==2 and p.name in PUBLIC_DOCS
     if name in {'安装.command','启动.command','停止.command','配置.command','诊断.command','install.cmd','start.cmd','stop.cmd','config.cmd','doctor.cmd'}:return True
     if name.startswith('apps/web/dist/'):return kind!='source' and p.suffix in {'.html','.js','.css','.svg','.png','.woff2'}
@@ -62,6 +64,7 @@ def build(root,output,kind='macos-install',release_version=None):
     secrets=configured_secrets(root);files={}
     candidates=[root/name for name in ROOT_FILES|WEB_FILES]
     candidates += [root/'docs'/name for name in PUBLIC_DOCS]
+    candidates += [root/'benchmarks'/name for name in BENCHMARKS]
     for base in sorted(SOURCE_DIRS | ({'apps/web/dist'} if kind!='source' else set())):
         directory=root/base
         if directory.is_symlink():raise DistributionError('源目录不允许符号链接：'+base)
