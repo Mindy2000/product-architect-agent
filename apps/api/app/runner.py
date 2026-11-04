@@ -210,7 +210,7 @@ def _git(workspace: Path, args: list[str], timeout: int = 20) -> subprocess.Comp
 def stage_project(run_id: str) -> None:
     from .project import manifest, safe_file
     workspace = workspace_for(run_id)
-    names = set(manifest(run_id)['files']) | set(framework_files(run_id)) | {'tests/acceptance.spec.ts', 'tests/preview.spec.ts', 'preview.png'}
+    names = set(manifest(run_id)['files']) | set(framework_files(run_id)) | {'tests/acceptance.spec.ts', 'tests/preview.spec.ts', 'tests/standard/health.spec.ts', 'preview.png'}
     paths = []
     for name in sorted(names):
         path = workspace / name
@@ -279,7 +279,13 @@ def _trim(value: str, limit: int = 12_000) -> str:
 
 
 def run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: Path | None = None) -> CommandResult:
-    if phase not in {"build", "test", "acceptance", "preview", "migrate", "regression"}:
+    from .runtime_limits import worker_slot
+    with worker_slot(ROOT):
+        return _run_phase(run_id,phase,timeout,parent_database=parent_database)
+
+
+def _run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: Path | None = None) -> CommandResult:
+    if phase not in {"build", "test", "acceptance", "preview", "migrate", "regression", "health"}:
         raise SandboxError("请求了未授权的容器命令。")
     workspace = workspace_for(run_id)
     if not workspace.exists() or workspace.is_symlink():
@@ -287,7 +293,7 @@ def run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: P
     if not SECCOMP_PROFILE.is_file():
         raise SandboxError("Playwright 安全配置缺失。")
     fixed_script = "if [ ! -L node_modules ]; then ln -s /opt/worker/node_modules node_modules; fi; "
-    fixed_script += 'if [ "$PHASE" = build ]; then npm run build; elif [ "$PHASE" = preview ]; then ./node_modules/.bin/playwright test tests/preview.spec.ts --reporter=line; elif [ "$PHASE" = acceptance ]; then ./node_modules/.bin/playwright test tests/acceptance.spec.ts --reporter=line; elif [ "$PHASE" = regression ]; then ./node_modules/.bin/playwright test --reporter=line,json; else npm run test:e2e; fi'
+    fixed_script += 'if [ "$PHASE" = build ]; then npm run build; elif [ "$PHASE" = preview ]; then ./node_modules/.bin/playwright test tests/preview.spec.ts --reporter=line; elif [ "$PHASE" = acceptance ]; then ./node_modules/.bin/playwright test tests/acceptance.spec.ts --reporter=line; elif [ "$PHASE" = health ]; then ./node_modules/.bin/playwright test tests/standard/health.spec.ts --reporter=line; elif [ "$PHASE" = regression ]; then ./node_modules/.bin/playwright test --reporter=line,json; else npm run test:e2e; fi'
     from . import fullstack
     is_fullstack=fullstack.application_type(run_id)=='fullstack_crud'
     if phase=='migrate' and not is_fullstack:raise SandboxError('前端项目没有业务迁移命令。')
@@ -334,7 +340,7 @@ def run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: P
 
 def _source_files(workspace: Path) -> list[Path]:
     from .project import manifest
-    names = set(manifest(workspace.name)['files']) | set(framework_files(workspace.name)) | {'tests/acceptance.spec.ts', 'tests/preview.spec.ts', 'preview.png'}
+    names = set(manifest(workspace.name)['files']) | set(framework_files(workspace.name)) | {'tests/acceptance.spec.ts', 'tests/preview.spec.ts', 'tests/standard/health.spec.ts', 'preview.png'}
     result = []
     for name in sorted(names):
         path = workspace / name
@@ -383,17 +389,22 @@ def deliver(run_id: str, state: dict[str, Any]) -> dict[str, str]:
         report.extend(['', '## 验收标准', ''])
     if state.get('operator_assisted'):
         report.extend(['', '## 执行方式与限制', '', state.get('operator_note','本次由Codex辅助完成，不能视为执行器完全自主完成。'), '', '## 验收标准', ''])
-    report.extend(f"- {item}" for item in state.get("acceptance_criteria", []))
+    from .acceptance import matrix
+    evidence=matrix(run_id,state)
+    report.extend(['','## 验收证据（交付时快照）','',evidence['notice'],f"逐条确认：{evidence['counts']['passed']} / {evidence['counts']['total']}；未核对或已失效：{evidence['counts']['unverified']}",f"检查来源：{evidence['technical']['test_kind']}；独立测试不自动映射全部需求。"])
+    labels={'passed':'已确认通过','failed':'已确认失败','stale':'证据已失效','unreviewed':'尚未核对'}
+    report.extend(f"- [{labels[item['status']]}] {item['text']}" for item in evidence['criteria'])
     if web_sources:
         report.extend(['','## 公开网页参考来源（冻结快照，非验收证明）',''])
         report.extend('- '+item['title']+' · '+item['url']+' · SHA256 '+item['sha256'] for item in web_sources)
-    report.extend(["", "## 浏览器验收结果", "", _trim(state.get("test_output", "未运行"), 8000), "", "## 构建结果", "", _trim(state.get("build_output", "未运行"), 8000), "", "## 自动修复记录", ""])
+    report.extend(["", "## 浏览器测试结果（不等同全部需求验收）", "", _trim(state.get("test_output", "未运行"), 8000), "", "## 构建结果", "", _trim(state.get("build_output", "未运行"), 8000), "", "## 自动修复记录", ""])
     report.extend(f"- {event.get('summary', '')}" for event in state.get("trace", []) if event.get("stage") == "repair")
     report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
     archive_path = OUTPUT_ROOT / f"{run_id}-source.zip"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         if state.get('requirements_confirmed'):
             archive.writestr('PRODUCT_SPEC.json',json.dumps({'design_id':state.get('design_id'),'revision':state.get('design_revision'),'spec':spec,'reference_sources':reference_sources,'knowledge_sources':knowledge_sources,'web_sources':web_sources},ensure_ascii=False,indent=2))
+        archive.writestr('ACCEPTANCE_EVIDENCE.json',json.dumps(evidence,ensure_ascii=False,indent=2))
         for path in _source_files(workspace):
             archive.write(path, path.relative_to(workspace).as_posix())
     relative_workspace = workspace.relative_to(ROOT).as_posix()

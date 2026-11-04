@@ -14,7 +14,7 @@ def run():
  results=[]
  with tempfile.TemporaryDirectory(prefix='pa-offline-',dir=ROOT/'data' if (ROOT/'data').exists() else ROOT) as temporary:
   temp=Path(temporary);package=distribution.build(ROOT,temp/'package',kind='source');source=temp/'source';distribution.extract(package,source)
-  shutil.copytree(ROOT/'apps/web/dist',source/'apps/web/dist');shutil.copyfile(source/'.env.example',source/'.env')
+  shutil.copytree(ROOT/'apps/web/dist',source/'apps/web/dist');shutil.copyfile(source/'.env.example',source/'.env');(source/'data').mkdir();(source/'outputs').mkdir()
   scenarios=[('ui_workflow',['--source',str(source),'--report',str(out/'workflow.json')]),('checkpoint_restart',[]),('fullstack_roundtrip',[])]
   if not args.skip_workbench:scenarios.append(('workbench_roundtrip',['--source',str(source),'--report',str(out/'workbench.json')]))
   scenarios.append(('regression_roundtrip',[]))

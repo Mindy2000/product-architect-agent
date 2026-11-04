@@ -9,10 +9,10 @@ from app.main import PreviewAction
 class PreviewTests(unittest.TestCase):
     def test_browser_container_remains_isolated_and_stdin_stays_open(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'dist').mkdir();(root/'dist/index.html').write_text('<div/>')
+            identifier=str(uuid.uuid4());root=Path(tmp)/'generated-projects'/identifier;(root/'dist').mkdir(parents=True);(root/'dist/index.html').write_text('<div/>')
             process=MagicMock()
-            with patch.object(preview,'workspace_for',return_value=root),patch.object(preview.subprocess,'Popen',return_value=process) as popen,patch.object(preview.Preview,'read',return_value={'ok':True}):
-                preview.Preview(str(uuid.uuid4()))
+            with patch.object(preview,'workspace_for',return_value=root),patch.object(preview.subprocess,'Popen',return_value=process) as popen,patch.object(preview.Preview,'read',return_value={'ok':True}),patch.object(preview.subprocess,'run'):
+                session=preview.Preview(identifier);session.close()
             command=popen.call_args.args[0]
             for flag in ('-i','--network=none','--read-only','--cap-drop=ALL','--user=pwuser'):
                 self.assertIn(flag,command)

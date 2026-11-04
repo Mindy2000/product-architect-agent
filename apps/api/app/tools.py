@@ -96,8 +96,8 @@ def successful_validation(run_id: str, name: str, digest: str) -> dict | None:
         rows = connection.execute('SELECT result_json FROM tool_calls WHERE run_id=? AND tool_name=? AND status=? ORDER BY completed_at DESC', (run_id, name, 'completed')).fetchall()
         for row in rows:
             result = json.loads(row['result_json'])
-            if result.get('ok') and result.get('data', {}).get('passed') and result.get('data', {}).get('digest') == digest:
-                return result['data']
+            if result.get('data', {}).get('digest') == digest:
+                return result['data'] if result.get('ok') and result['data'].get('passed') else None
     finally: connection.close()
     return None
 
@@ -162,16 +162,22 @@ def _test(context, args):
     if not built or not built.get('passed'):
         raise project.ProjectError('请先对当前源码执行成功的project.build。')
     cached = successful_validation(context.run_id, 'project.test', digest)
-    if cached and cached.get('profile') == context.acceptance_profile: return {**cached, 'cached':True}
+    from .acceptance import suite_hash,health_hash
+    expected_suite=suite_hash(context.acceptance_profile)
+    if cached and cached.get('profile') == context.acceptance_profile and cached.get('suite_sha256')==expected_suite and cached.get('health_sha256')==health_hash() and cached.get('health_passed') is True: return {**cached, 'cached':True}
     profile = context.acceptance_profile
     if profile != 'generated':
         allowed = {'todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1'}
         if profile not in allowed: raise project.ProjectError('未知的独立验收类型。')
         content = (runner.ROOT / 'benchmarks' / (profile + '.spec.ts')).read_text(encoding='utf-8')
         runner._write_file(runner.workspace_for(context.run_id), 'tests/acceptance.spec.ts', content)
-    result = runner.run_phase(context.run_id, 'acceptance' if profile != 'generated' else 'test', timeout=180)
+    result = runner.run_phase(context.run_id, 'acceptance' if profile != 'generated' else 'test', timeout=120)
+    health_content=(runner.WORKER_CONTEXT.parent/'health.spec.ts').read_text()
+    runner._write_file(runner.workspace_for(context.run_id),'tests/standard/health.spec.ts',health_content)
+    health = runner.run_phase(context.run_id,'health',timeout=60)
     project.sources(context.run_id)
-    return {'digest':digest,'profile':profile,'passed':result.exit_code == 0,'exit_code':result.exit_code,'output':result.output,'duration_seconds':result.duration_seconds}
+    if (runner.workspace_for(context.run_id)/'tests/standard/health.spec.ts').read_text()!=health_content:raise project.ProjectError('固定基础检查文件被更改，结果未采纳。')
+    return {'digest':digest,'profile':profile,'suite_sha256':expected_suite,'health_sha256':health_hash(),'health_passed':health.exit_code==0,'evidence_kind':'generated' if profile=='generated' else 'independent_suite','requirements_confirmed':False,'passed':result.exit_code == 0 and health.exit_code==0,'exit_code':result.exit_code or health.exit_code,'output':result.output+'\n固定页面基础检查（不代表需求验收）：\n'+health.output,'duration_seconds':result.duration_seconds+health.duration_seconds}
 
 
 def _snapshot(context, args):

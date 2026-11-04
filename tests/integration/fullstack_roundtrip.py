@@ -82,6 +82,12 @@ def main():
         def fullstack_browser():
             result=runner.run_phase(identifier,'acceptance',timeout=180);expect(result.exit_code==0,result.output);return {'exit_code':result.exit_code,'log':result.output,'suite_sha256':hashlib.sha256(SUITE.encode()).hexdigest()}
         case('fullstack_browser_crud_files',fullstack_browser)
+
+        def fixed_health():
+            runner._write_file(workspace,'tests/standard/health.spec.ts',(runner.WORKER_CONTEXT.parent/'health.spec.ts').read_text())
+            result=runner.run_phase(identifier,'health',timeout=60);expect(result.exit_code==0,result.output);return {'exit_code':result.exit_code,'log':result.output,'product_requirements_verified':False}
+        case('fixed_fullstack_page_health',fixed_health)
+
         def persistent_migration():
             fullstack.data_dir(identifier);result=runner.run_phase(identifier,'migrate');expect(result.exit_code==0,result.output);return json.loads(result.output)
         case('explicit_persistent_migration',persistent_migration)

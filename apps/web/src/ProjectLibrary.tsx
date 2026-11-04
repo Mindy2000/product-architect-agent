@@ -6,7 +6,7 @@ import SourceImport from './SourceImport'
 import EngineeringPanel from './EngineeringPanel'
 
 const API='http://127.0.0.1:8000/api/v1/projects'
-const labels:Record<string,string>={completed:'验收通过',failed_validation:'验收未通过',failed:'运行失败',failed_model:'模型调用失败',failed_sandbox:'执行环境失败',blocked_budget:'预算不足',blocked_configuration:'配置待完成',interrupted:'服务中断',paused:'已暂停',queued:'排队中',running:'执行中',cancelled:'已取消'}
+const labels:Record<string,string>={completed:'执行完成',failed_validation:'技术检查未通过',failed:'运行失败',failed_model:'模型调用失败',failed_sandbox:'执行环境失败',blocked_budget:'预算不足',blocked_configuration:'配置待完成',interrupted:'服务中断',paused:'已暂停',queued:'排队中',running:'执行中',cancelled:'已取消'}
 const finished=new Set(Object.keys(labels).filter(status=>!['queued','running'].includes(status)))
 type Project={id:string;title?:string;request_excerpt:string;status:string;stage:string;created_at:string;archived:number;parent_run_id?:string;operator_assisted?:number}
 type Page={items:Project[];total:number;offset:number;limit:number}

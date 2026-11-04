@@ -1,13 +1,18 @@
 """Offline UI-to-container review against a clean public checkout; no provider requests."""
-import argparse,io,json,os,sys,threading,time,zipfile
+import argparse,io,json,os,re,sys,threading,time,zipfile,uuid
 from pathlib import Path
 from unittest.mock import patch
 p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argument('--report',required=True);args=p.parse_args()
 SOURCE=Path(args.source).resolve();REPORT=Path(args.report).resolve();sys.path.insert(0,str(SOURCE/'apps/api'));sys.path.insert(0,str(SOURCE/'scripts'))
 os.environ['MODEL_CALLS_ENABLED']='false';os.environ['VISION_CALLS_ENABLED']='false'
-from app import main,model,designs,graph,executor,project,store,tools
+from app import main,model,designs,graph,executor,project,store,tools,dify
 import manage,uvicorn
 from playwright.sync_api import sync_playwright,expect
+# Every actual Dify operation is forbidden; policy/restore checks below remain local.
+dify.call=lambda *a,**k:(_ for _ in ()).throw(AssertionError('Remote Dify forbidden'))
+TEST_RAG_KEY='fixture-'+uuid.uuid4().hex
+config=SOURCE/'.env';config.write_text(re.sub(r'^RAG_API_KEY=.*$', 'RAG_API_KEY='+TEST_RAG_KEY,config.read_text(),flags=re.M))
+dify.credentials=lambda:TEST_RAG_KEY
 import http.server
 report={'source':str(SOURCE),'provider':'deterministic_fake','paid_calls':0,'checks':[],'scripted_stages':[],'page_errors':[],'console_errors':[]}
 def passed(name):report['checks'].append(name);REPORT.write_text(json.dumps(report,ensure_ascii=False,indent=2));print('PASS',name,flush=True)
@@ -97,10 +102,30 @@ try:
    passed('真实容器构建失败→诊断→一次修复→标准Playwright验收通过')
    assert (SOURCE/'generated-projects'/rid/'tests/acceptance.spec.ts').read_bytes()==(SOURCE/'benchmarks/todo-v1.spec.ts').read_bytes()
    passed('发布包内独立验收文件实际被加载执行')
+
+   evidence=page.request.get(f'http://127.0.0.1:8000/api/v1/projects/{rid}/acceptance').json()
+   assert evidence['counts']['passed']==0 and evidence['technical']['health_passed'] and evidence['technical']['test_kind']=='independent_suite',evidence
+   page.get_by_text('逐条验收与独立证据',exact=True).click()
+   expect(page.get_by_label('验收方式 1')).to_be_visible()
+   page.get_by_label('验收方式 1',exact=True).select_option('independent_suite:passed')
+   page.get_by_label('验收说明 1',exact=True).fill('固定新增任务测试对应本条新增任务要求')
+   page.get_by_role('button',name='保存逐条验收记录',exact=True).click()
+   expect(page.get_by_text('已保存与当前源码绑定的验收记录。源码、需求或独立测试变化后，对应确认将失效。',exact=True)).to_be_visible()
+   current=page.request.get(f'http://127.0.0.1:8000/api/v1/projects/{rid}/acceptance').json()
+   assert current['counts']['passed']==1 and current['review_status']=='pending',current
+   with page.expect_download() as event:page.get_by_role('link',name='导出当前验收证据 JSON').click()
+   exported=json.loads(Path(event.value.path()).read_text());assert exported['counts']['passed']==1
+   page.screenshot(path=str(REPORT.parent/'acceptance-evidence-desktop.png'),full_page=True)
+   page.set_viewport_size({'width':390,'height':844});assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+2');page.screenshot(path=str(REPORT.parent/'acceptance-evidence-mobile.png'),full_page=True);page.set_viewport_size({'width':1440,'height':1000})
+   passed('固定基础检查与独立套件通过仍不冒充全部需求验收，逐条关联可保存及导出')
+
    with page.expect_download() as event:
     page.get_by_role('link',name='源码 ZIP',exact=True).first.click()
    download=event.value;download.save_as(str(REPORT.parent/'flow-source-export.zip'))
-   with zipfile.ZipFile(download.path()) as z:assert not any('.env' in n or 'app.sqlite3' in n for n in z.namelist())
+   with zipfile.ZipFile(download.path()) as z:
+    assert not any('.env' in n or 'app.sqlite3' in n for n in z.namelist())
+    assert json.loads(z.read('ACCEPTANCE_EVIDENCE.json'))['counts']['passed']==0
+    assert 'tests/standard/health.spec.ts' in z.namelist()
    for kind in ['trace','git_diff','manifest','report']:
     assert page.request.get(f'http://127.0.0.1:8000/api/v1/runs/{rid}/artifact/{kind}').status==200
    passed('界面下载源码ZIP、Trace、Git diff、清单和交付报告')
@@ -113,6 +138,24 @@ try:
    assert restored['status']=='paused' and restored['parent_run_id']==rid
    assert project.sources(restored['run_id'])==project.sources(rid)
    passed('源码恢复为独立暂停副本，原版本保持完成')
+
+   # Return to the composer without submitting another model task.
+   page.get_by_role('button',name='新建开发任务',exact=False).click()
+   dify_panel=page.locator('details.knowledge-library').filter(has=page.get_by_text('Dify 远程语义知识库 · 已选 0',exact=True)).first
+   dify_panel.locator('summary').first.click()
+   expect(dify_panel.get_by_label('Dify观察已用额度')).to_be_visible()
+   dify_panel.get_by_label('Dify观察已用额度').fill('35')
+   dify_panel.get_by_label('Dify本地保护线').fill('60')
+   dify_panel.get_by_role('checkbox',name='我已核对该模型有可用免费额度，且不会回退到付费模型').check()
+   dify_panel.get_by_role('button',name='保存免费策略（仅本机）',exact=True).click()
+   expect(dify_panel.get_by_text('已保存本机免费策略；原请求、预留额度和暂停状态保留，没有验证Key或发起远程请求。',exact=True)).to_be_visible()
+   with dify.connect() as conn:conn.execute('INSERT OR REPLACE INTO controls VALUES (1,?)',('synthetic authentication pause',));conn.commit()
+   dify_panel.get_by_role('button',name='读取本地台账（不调用远程）',exact=True).click()
+   dify_panel.get_by_role('checkbox',name='我已核对控制台并处理鉴权、额度或限流问题').check()
+   dify_panel.get_by_role('button',name='解除本机暂停（不重试请求）',exact=True).click()
+   expect(dify_panel.get_by_text('已解除本机暂停，没有重试请求；下次远程操作仍须手动发起并受原有限额保护。不确定的建库/同步记录仍保留，需先核对控制台。',exact=True)).to_be_visible()
+   passed('新用户免费策略确认及解除暂停的浏览器链路只改本机记录，未调用Dify')
+
    page.screenshot(path=str(REPORT.parent/'flow-workbench.png'),full_page=True)
    page.set_viewport_size({'width':390,'height':844});assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+2')
    assert not report['page_errors'],report['page_errors']

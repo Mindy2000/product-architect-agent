@@ -34,7 +34,7 @@ type Budget = {spent_cny_estimate:number; budget_cny:number; remaining_cny_estim
 type Capabilities = {knowledge_library?:{enabled:boolean};reference_materials?:{enabled:boolean};rag?:{mode:string};design_review_required?:boolean;runtime_version?:number;model_provider:string;model:string;available_models:string[];model_calls_enabled:boolean;sandbox:{ready:boolean}}
 
 const statusText:Record<string,string> = {
-  cancelled:'已取消', paused:'已暂停', queued:'排队中', running:'执行中', completed:'验收通过', failed_validation:'交付完成，验收未通过',
+  cancelled:'已取消', paused:'已暂停', queued:'排队中', running:'执行中', completed:'执行完成', failed_validation:'交付完成，技术检查未通过',
   failed:'运行失败', failed_model:'模型调用失败', failed_sandbox:'隔离环境失败', interrupted:'服务已中断',
   blocked_budget:'预算达到上限', blocked_configuration:'模型配置待完成'
 }

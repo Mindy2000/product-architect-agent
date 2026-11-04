@@ -213,6 +213,11 @@ def diagnostic_report():
   try:packages[name]=importlib.metadata.version(name)
   except importlib.metadata.PackageNotFoundError:packages[name]='not_installed'
  report={'format':1,'created_at':time.time(),'application_version':archive.version(root()),'system':{'platform':platform.system(),'machine':platform.machine(),'python':platform.python_version()},'packages':packages,'database_health':database_health,'configuration_health':config_health,'installation':{'git_available':bool(shutil.which('git')),'docker_cli_available':bool(shutil.which('docker')),'frontend_built':(root()/'apps/web/dist/index.html').is_file(),'free_disk_gib':round(shutil.disk_usage(root()).free/1024**3,1)},'configuration':{'text_key_present':bool(values.get('MODEL_API_KEY')),'vision_key_present':bool(values.get('VISION_API_KEY')),'rag_key_present':bool(values.get('RAG_API_KEY')),'text_enabled':str(values.get('MODEL_CALLS_ENABLED','false')).lower()=='true'},'runs_by_status':counts,'failure_stages':errors,'included':['系统与依赖版本','本地工具是否存在','配置布尔状态','任务状态与失败阶段计数'],'excluded':['API密钥与.env','用户名、安装路径、账户标识','任务需求与文档正文','源码、业务数据库及附件','原始日志及任意异常文本'],'network_requests':0}
+ from .maintenance_errors import CATALOG
+ try:
+  report['maintenance_failures']=[{'kind':item['kind'] if item['kind'] in {'backup','restore','regression'} else 'unknown','status':item['status'] if item['status'] in jobs.TERMINAL else 'active','error_code':(item.get('result',{}).get('failure') or {}).get('code') if (item.get('result',{}).get('failure') or {}).get('code') in CATALOG else ('service_interrupted' if item['status']=='interrupted' else 'unknown_failure')} for item in jobs.recent(root()) if item['status'] in {'failed','interrupted'}]
+ except (sqlite3.Error,ValueError,TypeError,KeyError,AttributeError,archive.ArchiveError):report['maintenance_failures']=[{'status':'unreadable','error_code':'database_invalid'}]
+
  # Defense in depth, without sending diagnostics anywhere.
  text=redact(json.dumps(report,ensure_ascii=False)).replace(str(root()),'[WORKBENCH]').replace(str(Path.home()),'[HOME]')
  return json.loads(text)

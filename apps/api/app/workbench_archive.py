@@ -12,7 +12,9 @@ DATA_DIRS={'projects','git','applications','knowledge','dify','research','vision
 TERMINAL={'completed','failed_validation','failed','failed_model','failed_sandbox','blocked_budget','blocked_configuration','interrupted','paused','cancelled'}
 UUID_RE=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 EXCLUSIONS=['.env与API密钥配置','虚拟环境、node_modules、Docker镜像','构建缓存、浏览器测试缓存、OCR语言缓存','临时上传、旧备份与恢复副本','服务PID、原始日志及本机网络/容器配置']
-class ArchiveError(Exception):pass
+class ArchiveError(Exception):
+ def __init__(self,message,code='archive_rejected'):
+  super().__init__(message);self.code=code
 class OperationCancelled(ArchiveError):pass
 
 def checkpoint(progress=None,cancelled=None,phase='',done=0,total=1):
@@ -123,7 +125,7 @@ def create(root,destination,progress=None,cancelled=None):
  from dotenv import dotenv_values
  env=safe_path(root,'.env');values={**os.environ,**(dict(dotenv_values(env)) if env.is_file() else {})}
  credentials=[str(v).encode() for k,v in values.items() if v and len(str(v))>=8 and re.search(r'(?:API_KEY|SECRET|TOKEN|PASSWORD)$',k,re.I)]
- if shutil.disk_usage(root).free<sum(v[0] for v in before.values())*2+128*1024**2:raise ArchiveError('磁盘空间不足以创建安全备份，请先整理空间。')
+ if shutil.disk_usage(root).free<sum(v[0] for v in before.values())*2+128*1024**2:raise ArchiveError('磁盘空间不足以创建安全备份，请先整理空间。','disk_space')
  destination.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
  try:
   with tempfile.TemporaryDirectory(dir=destination.parent) as temp,zipfile.ZipFile(destination,'x',zipfile.ZIP_DEFLATED) as archive:
@@ -194,7 +196,7 @@ def restore(root,archive_path,token,progress=None,cancelled=None):
   if receipt.is_file() and json.loads(receipt.read_text()).get('archive_sha256')==file_sha(archive_path):return {'location':str(target),'replayed':True,'executed':False,'restart_required':True}
   raise ArchiveError('恢复目标已存在，未覆盖。')
  total=sum(e['bytes'] for e in manifest['files'])
- if shutil.disk_usage(home).free<total+archive_path.stat().st_size+256*1024**2:raise ArchiveError('磁盘不足以保留当前工作台并创建恢复副本。')
+ if shutil.disk_usage(home).free<total+archive_path.stat().st_size+256*1024**2:raise ArchiveError('磁盘不足以保留当前工作台并创建恢复副本。','disk_space')
  stage=Path(tempfile.mkdtemp(prefix='.restore-',dir=home));payload=stage/'installation'
  try:
   checkpoint(progress,cancelled,'准备独立工作台')

@@ -22,13 +22,13 @@ class Gate:
    if self.owner==owner:self.owner=None;self.condition.notify_all()
  @contextmanager
  def exclusive(self,owner,cancelled):
-  if not self.reserve(owner):raise archive.ArchiveError('另一个维护操作正在进行，请稍后再试。')
+  if not self.reserve(owner):raise archive.ArchiveError('另一个维护操作正在进行，请稍后再试。','resource_busy')
   try:
    with self.condition:
     end=time.monotonic()+8
     while self.active:
      archive.checkpoint(None,cancelled)
-     if time.monotonic()>end:raise archive.ArchiveError('仍有本地操作未结束，请先暂停开发或关闭预览。')
+     if time.monotonic()>end:raise archive.ArchiveError('仍有本地操作未结束，请先暂停开发或关闭预览。','resource_busy')
      self.condition.wait(.1)
    yield
   finally:self.release(owner)
@@ -91,8 +91,10 @@ def execute(root,identifier,operation):
  except archive.OperationCancelled:
   update(root,identifier,status='cancelled',phase='已取消',error='操作已取消，原工作台和原备份保留。',ended=time.time())
  except Exception as error:
-  message=redact(str(error)) if isinstance(error,archive.ArchiveError) else '本地维护未完成，原数据保留。请查看诊断，修正原因后重新开始。'
-  update(root,identifier,status='failed',phase='未完成',error=message,ended=time.time())
+  from .maintenance_errors import describe
+  failure=describe(error)
+  message=redact(str(error)) if isinstance(error,archive.ArchiveError) else failure['message']
+  update(root,identifier,status='failed',phase='未完成',error=message,result=json.dumps({'failure':failure},ensure_ascii=False),ended=time.time())
 
 def start(root,kind,options,operation):
  global _pool

@@ -17,11 +17,12 @@ from .security_policy import LocalSafetyMiddleware, MAX_QUEUED_RUNS, redact, saf
 from .graph import build_graph
 from .model import SUPPORTED_MODELS, BudgetExceeded, ModelCallFailed, ModelNotConfigured, budget_status
 from .runner import SandboxError, worker_image_available
-from . import store, workbench, regression
+from . import store, workbench, regression, acceptance
 from . import designs, references, knowledge, library, history, maintenance, operations, dify, dependencies, source_import, model_capabilities, vision, fullstack, application_storage, research
 
-app = FastAPI(title="Product Architect Agent", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Product Architect Agent", version="0.3.1", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(workbench.router)
+app.include_router(acceptance.router)
 app.include_router(regression.router)
 app.include_router(designs.router)
 app.include_router(references.router)

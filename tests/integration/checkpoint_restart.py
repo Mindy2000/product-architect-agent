@@ -7,6 +7,13 @@ ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'apps/api'))
 os.environ['MODEL_CALLS_ENABLED']='false';os.environ['VISION_CALLS_ENABLED']='false'
 from app import graph,executor,runner,project,store,tools,model,research
 from app.designs import ProductDesign
+from dataclasses import replace
+_original_test=tools.TOOLS['project.test'].handler
+def traced_test(*args,**kwargs):
+    try:return _original_test(*args,**kwargs)
+    except Exception:
+        import traceback;traceback.print_exc();raise
+tools.TOOLS['project.test']=replace(tools.TOOLS['project.test'],handler=traced_test)
 from langgraph.types import Command
 lab=ROOT/'data'/('offline-graph-'+uuid.uuid4().hex[:10]);lab.mkdir()
 identifier=str(uuid.uuid4());calls=[];pause_once=[False]
@@ -21,6 +28,7 @@ def provider(run_id,stage,*args,**kwargs):
     calls.append(stage)
     if stage=='planning':
         return model.PlanResult.model_validate({'steps':[{'title':'实现状态与测试','description':'写入计数器及浏览器检查','depends_on':[],'acceptance_indices':[0,1,2]},{'title':'检查源码清单','description':'查看受控文件','depends_on':[1],'acceptance_indices':[]},{'title':'保存源码版本','description':'固定Git快照','depends_on':[2],'acceptance_indices':[3]}]}),{}
+    if stage=='diagnosis':return model.RepairDecision(action='stop',reason='离线夹具不自动掩盖新失败，保留真实诊断'),{}
     turn=int(stage.split('-')[-1]);action='tool';task=None;tool=None;arguments={}
     if turn==1:
         task='task-1';tool='project.apply_changes';old=project.sources(identifier)
@@ -52,6 +60,8 @@ with ExitStack() as stack:
     first_digest=project.manifest(identifier)['digest'];workflow.checkpointer.conn.close()
     store.set_pause_requested(identifier,False);workflow=graph.build_graph(checkpoint)
     try:result=workflow.invoke(Command(resume=True),config)
+    except Exception:
+        failure=store.get_run(identifier) or {};print('SYNTHETIC FAILURE:',failure.get('last_error'),failure.get('test_output'),flush=True);raise
     finally:workflow.checkpointer.conn.close()
     assert result['status']=='completed',result.get('last_error')
     assert len(calls)==len(set(calls)) and len(calls)==8,calls

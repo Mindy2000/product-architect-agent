@@ -73,14 +73,14 @@ def execute_job(root,identifier,job_id,progress,cancelled):
   try:
    while child.poll() is None:
     archive.checkpoint(None,cancelled)
-    if time.monotonic()-started>600 or log.stat().st_size>2*1024**2:raise archive.ArchiveError('回归检查超过时限或输出上限，已停止。')
+    if time.monotonic()-started>600 or log.stat().st_size>2*1024**2:raise archive.ArchiveError('回归检查超过时限或输出上限，已停止。','operation_timeout')
     status=directory/'worker-progress.json'
     if status.is_file():
      try:
       state=json.loads(status.read_text());progress(state['phase'],state['done'],state['total'])
      except (ValueError,KeyError):pass
     time.sleep(.2)
-   if child.returncode:raise archive.ArchiveError('回归执行未完成；原项目未修改，可检查环境后重试。')
+   if child.returncode:raise archive.ArchiveError('回归执行未完成；原项目未修改，可检查环境后重试。','runtime_unavailable')
   finally:
    job.close();kill_process_group(child)
    try:
@@ -89,6 +89,6 @@ def execute_job(root,identifier,job_id,progress,cancelled):
     if containers:run_bounded(['docker','--context',runner.DOCKER_CONTEXT,'rm','-f',*containers],timeout=20,check=True)
    finally:shutil.rmtree(directory/'scratch',ignore_errors=True)
  result=json.loads((directory/'regression-result.json').read_text())
- if project.source_digest(project.sources(identifier))!=evidence['after_digest'] or project.source_digest(project.sources(evidence['parent_run_id']))!=evidence['before_digest']:raise archive.ArchiveError('检查期间源文件有变化，结果未保存，请重新检查。')
+ if project.source_digest(project.sources(identifier))!=evidence['after_digest'] or project.source_digest(project.sources(evidence['parent_run_id']))!=evidence['before_digest']:raise archive.ArchiveError('检查期间源文件有变化，结果未保存，请重新检查。','source_changed')
  project.atomic_json(project.metadata_dir(identifier)/'regression-latest.json',result)
  return result

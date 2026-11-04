@@ -1,5 +1,7 @@
 # Product Architect Agent
 
+当前版本0.3.1。唯一状态入口：[PROJECT_STATUS](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/PROJECT_STATUS.md)。前四项收尾记录：[AUDIT_CLOSEOUT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_CLOSEOUT.md)。
+
 中文本地产品架构与应用开发工作台。支持需求方案确认、受控工具执行、React应用、可选FastAPI/SQLite CRUD、localStorage、文档参考/可选知识库、隔离构建与Playwright检查、有限自动修复、Git版本和源码/数据备份。
 
 ## 下载与安装
@@ -23,7 +25,7 @@ Windows：运行EXE，安装到当前用户目录的独立版本文件夹；从�
 
 macOS解压安装ZIP可运行`安装.command`、`配置.command`、`启动.command`、`停止.command`、`诊断.command`；Windows对应`install.cmd`、`config.cmd`、`start.cmd`、`stop.cmd`、`doctor.cmd`。
 
-配置入口支持DeepSeek文字、千问视觉、Dify知识库。Key通过隐藏输入保存在当前版本`.env`，不会出现在诊断结果、命令参数或发行包中。填写Key不会自动开启调用。需要使用文字模型时，由用户在本地`.env`明确设置`MODEL_CALLS_ENABLED=true`，核对费用上限后重启。视觉默认关闭，另有次数/金额限制。Dify为可选插件，仍须在知识库界面明确配置和授权。
+配置入口支持DeepSeek文字、千问视觉、Dify知识库。Key通过隐藏输入保存在当前版本`.env`，不会出现在诊断结果、命令参数或发行包中。填写Key不会自动开启调用。需要使用文字模型时，由用户在本地`.env`明确设置`MODEL_CALLS_ENABLED=true`，核对费用上限后重启。视觉默认关闭，另有次数/金额限制。Dify为可选插件：先保存Key，再在知识库面板核对并确认免费策略；保存策略和解除暂停都只改本机记录，不自动联网、重置台账或重试。
 
 工作台地址：`http://127.0.0.1:5173/`。无需账号，仅限本机。界面使用预构建静态文件；生成代码始终在受限容器内运行。
 
@@ -71,3 +73,5 @@ GitHub Actions分别在macOS和Windows构建，包含安装器回归、API启动
 ## 0.3 持续维护
 
 新增离线完整流程 CI、0.2→0.3 工作台兼容恢复、可取消维护任务、父子版本回归比较和 Dify 离线故障检查。见 [操作与边界](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/OFFLINE_QUALITY_AND_MAINTENANCE.md)。真实模型任务和 Windows 完整 Docker 验证仍暂缓，不代表已完成。
+
+0.3.1 将“执行完成”与需求逐条验收分开；新增固定页面基础检查与源码绑定的人工/独立证据记录。交付报告和ZIP内包含交付时验收快照，最新记录可从项目面板导出。运行资源一次只允许一个构建/浏览器/预览，现有容量保持不变。

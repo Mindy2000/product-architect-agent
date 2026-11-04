@@ -1,6 +1,7 @@
 """Dify Cloud classic knowledge adapter: bounded transport, receipts and free-only policy."""
 from __future__ import annotations
 import hashlib,json,math,os,sqlite3,threading,time,uuid
+from typing import Literal
 from pathlib import Path
 from urllib import request,error
 import truststore
@@ -21,6 +22,7 @@ class DifyError(Exception):pass
 
 
 def connect():
+    if DATA.is_symlink() or any((DATA/('state.sqlite3'+suffix)).is_symlink() for suffix in ('','-wal','-shm','-journal')):raise DifyError('Dify本地记录路径异常。')
     DATA.mkdir(parents=True,exist_ok=True,mode=0o700)
     conn=sqlite3.connect(DATA/'state.sqlite3',timeout=20);conn.row_factory=sqlite3.Row
     conn.executescript('''
@@ -45,6 +47,8 @@ def credentials():
 def policy():
     try:value=json.loads((DATA/'free-policy.json').read_text())
     except (OSError,ValueError):raise DifyError('尚未确认Dify免费模型额度，已禁止向量调用。')
+    if not isinstance(value,dict):raise DifyError('Dify免费策略格式异常，请重新确认。')
+    if value.get('credential_fingerprint') and value['credential_fingerprint']!=hashlib.sha256(credentials().encode()).hexdigest():raise DifyError('Dify密钥已变化，请重新确认当前账户免费策略。')
     if value.get('model')!=MODEL or value.get('provider')!=PROVIDER or not value.get('free_only'):
         raise DifyError('Dify免费模型配置尚未确认。')
     return value
@@ -133,8 +137,9 @@ def status():
         pause=conn.execute('SELECT paused FROM controls WHERE id=1').fetchone()
         try:confirmed=policy();confirmed_at=confirmed.get('confirmed_at')
         except DifyError:confirmed={};confirmed_at=None
-        return {'configured':bool((dotenv_values(ROOT/'.env').get('RAG_API_KEY') or '').strip()),'free_only':True,'model':MODEL,
-            'free_confirmed_at':confirmed_at,'last_observed_used_credits':confirmed.get('observed_used_credits') if confirmed_at else None,'local_credit_ceiling':60,'paused':pause[0] if pause else None,'calls_last_24h':conn.execute('SELECT COUNT(*) FROM calls WHERE at>?',(time.time()-86400,)).fetchone()[0],
+        allocated=conn.execute('SELECT COALESCE(SUM(credit_reserve),0) FROM calls WHERE at>=?',(confirmed.get('guard_start',0),)).fetchone()[0]
+        return {'policy_revision':policy_revision(),'reserved_credits':allocated,'local_remaining_credits':max(0,confirmed.get('local_total_credit_ceiling',60)-confirmed.get('observed_used_credits',0)-allocated) if confirmed_at else 0,'configured':bool((dotenv_values(ROOT/'.env').get('RAG_API_KEY') or '').strip()),'free_only':True,'model':MODEL,
+            'free_confirmed_at':confirmed_at,'last_observed_used_credits':confirmed.get('observed_used_credits') if confirmed_at else None,'local_credit_ceiling':confirmed.get('local_total_credit_ceiling',60),'paused':pause[0] if pause else None,'calls_last_24h':conn.execute('SELECT COUNT(*) FROM calls WHERE at>?',(time.time()-86400,)).fetchone()[0],
             'limits':{'requests_per_minute':4,'requests_per_24h':40,'vector_operations_per_24h':12},
             'collections':[dict(row) for row in conn.execute('SELECT * FROM collections ORDER BY created')],
             'documents':[dict(row) for row in conn.execute('SELECT * FROM documents ORDER BY dataset_id,name')]}
@@ -255,3 +260,67 @@ class Search(BaseModel):
 
 @router.post('/retrieve')
 def retrieve(payload:Search):return capture([str(item) for item in payload.collection_ids],payload.query)
+
+
+class FreePolicyConfirmation(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    expected_revision: str = Field(pattern=r'^(missing|[0-9a-f]{64})$')
+    observed_used_credits: int = Field(ge=0, le=1000000000)
+    local_total_credit_ceiling: int = Field(ge=1, le=60)
+    free_model_confirmed: Literal[True]
+    no_paid_fallback: Literal[True]
+
+
+class ResumeConfirmation(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    expected_revision: str = Field(pattern=r'^[0-9a-f]{64}$')
+    console_checked: Literal[True]
+
+
+def policy_revision():
+    path = DATA/'free-policy.json'
+    if path.is_symlink():raise DifyError('Dify免费策略路径异常。')
+    if not path.exists():return 'missing'
+    if path.stat().st_size > 16384:raise DifyError('Dify免费策略过大，请检查本地配置。')
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@router.put('/policy')
+def confirm_free_policy(payload: FreePolicyConfirmation):
+    # This records the user's console observation only. It never contacts a provider.
+    key = credentials()
+    with lock:
+        conn = connect()
+        temporary = DATA/('.policy-'+uuid.uuid4().hex)
+        try:
+            if payload.expected_revision != policy_revision():raise HTTPException(409,'免费策略已变化，请刷新后再确认。')
+            previous = json.loads((DATA/'free-policy.json').read_text()) if payload.expected_revision != 'missing' else {}
+            if not isinstance(previous,dict):raise DifyError('旧策略无效，未覆盖；请先检查本地配置。')
+            allocated = conn.execute('SELECT COALESCE(SUM(credit_reserve),0) FROM calls WHERE at>=?',(previous.get('guard_start',0),)).fetchone()[0]
+            value = {'model':MODEL,'provider':PROVIDER,'free_only':True,
+                     'observed_used_credits':max(payload.observed_used_credits,previous.get('observed_used_credits',0)),
+                     'local_total_credit_ceiling':payload.local_total_credit_ceiling,
+                     'guard_start':previous.get('guard_start',0),
+                     'confirmed_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
+                     'credential_fingerprint':hashlib.sha256(key.encode()).hexdigest()}
+            with temporary.open('x',encoding='utf-8') as stream:
+                temporary.chmod(0o600);json.dump(value,stream,ensure_ascii=False);stream.flush();os.fsync(stream.fileno())
+            os.replace(temporary,DATA/'free-policy.json')
+        finally:
+            conn.close();temporary.unlink(missing_ok=True)
+    return {'network_requests':0,'ledger_preserved':True,'reserved_credits':allocated,
+            'message':'已保存本机免费策略；原请求、预留额度和暂停状态保留，没有验证Key或发起远程请求。', 'status':status()}
+
+
+@router.post('/resume')
+def resume_after_console_check(payload: ResumeConfirmation):
+    with lock:
+        if payload.expected_revision != policy_revision():raise HTTPException(409,'免费策略已变化，请重新读取。')
+        credentials();rules = policy();conn = connect()
+        try:
+            allocated = conn.execute('SELECT COALESCE(SUM(credit_reserve),0) FROM calls WHERE at>=?',(rules.get('guard_start',0),)).fetchone()[0]
+            if rules.get('observed_used_credits',0)+allocated >= rules.get('local_total_credit_ceiling',60):raise DifyError('本地保护额度已不足，不能解除暂停；不会重置额度或自动升级。')
+            conn.execute('DELETE FROM controls WHERE id=1');conn.commit()
+        finally:conn.close()
+    return {'network_requests':0,'ledger_preserved':True,'automatic_retry':False,
+            'message':'已解除本机暂停，没有重试请求；下次远程操作仍须手动发起并受原有限额保护。不确定的建库/同步记录仍保留，需先核对控制台。', 'status':status()}

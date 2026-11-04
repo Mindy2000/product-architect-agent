@@ -9,7 +9,7 @@ import time
 import uuid
 from .runner import ROOT, WORKER_IMAGE, DOCKER_CONTEXT, SECCOMP_PROFILE, workspace_for, SandboxError
 
-class Preview:
+class _Preview:
     def __init__(self, run_id):
         workspace=workspace_for(run_id)
         if not (workspace/'dist/index.html').is_file():
@@ -62,6 +62,24 @@ class Preview:
         except subprocess.TimeoutExpired:self.process.kill();self.process.wait()
         if self.process.stdin:self.process.stdin.close()
         if self.process.stdout:self.process.stdout.close()
+
+class Preview(_Preview):
+    def __init__(self,run_id):
+        from .runtime_limits import worker_slot
+        workspace=workspace_for(run_id)
+        if workspace.parent.name!='generated-projects':raise SandboxError('预览工作区路径异常。')
+        self._lease=worker_slot(workspace.parent.parent)
+        self._lease.__enter__()
+        try:super().__init__(run_id)
+        except BaseException:
+            self._release_slot();raise
+    def _release_slot(self):
+        if self._lease is not None:
+            lease=self._lease;self._lease=None;lease.__exit__(None,None,None)
+    def close(self):
+        try:super().close()
+        finally:self._release_slot()
+
 
 sessions={}
 lock=threading.Lock()
