@@ -1,10 +1,118 @@
-import {useState} from 'react'
-const API='http://127.0.0.1:8000/api/v1'
-export type ExecutionTask={id:string;title:string;description?:string;depends_on:string[];status:string;changed_paths?:string[];completion_summary?:string}
-type Receipt={operation_id:string;task_id:string;tool_name:string;status:string;result?:{ok:boolean;duration_seconds?:number;replayed?:boolean;data?:{passed?:boolean;changed_paths?:string[]};error?:{message:string}}}
-export default function TaskPanel({runId,tasks,turns,limit,feedback}:{runId:string;tasks:ExecutionTask[];turns:number;limit:number;feedback?:string}){
- const [receipts,setReceipts]=useState<Receipt[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(false)
- async function load(){setLoading(true);setError('');try{const r=await fetch(`${API}/runs/${runId}/tool-calls`);if(!r.ok)throw new Error('暂时无法读取工具记录');setReceipts(await r.json())}catch(e){setError(e instanceof Error?e.message:'读取失败')}finally{setLoading(false)}}
- const labels:Record<string,string>={pending:'等待依赖',running:'进行中',completed:'已完成'}
- return <section className="execution-panel"><div className="execution-heading"><b>任务执行</b><span>{turns} / {limit} 步</span></div><ol className="task-list">{tasks.map(task=><li key={task.id} className={'task-item '+task.status}><div><span className="task-state">{labels[task.status]??task.status}</span><strong>{task.title}</strong></div>{task.depends_on.length>0&&<small>依赖：{task.depends_on.join('、')}</small>}{task.completion_summary&&<p>{task.completion_summary}</p>}{!!task.changed_paths?.length&&<small>涉及文件：{task.changed_paths.join('、')}</small>}</li>)}</ol>{feedback&&<p className="executor-feedback">{feedback}</p>}<details onToggle={e=>{if(e.currentTarget.open)void load()}}><summary>工具操作记录</summary><button className="text-button" disabled={loading} onClick={()=>void load()}>{loading?'读取中…':'刷新记录'}</button>{error&&<p role="alert">{error}</p>}{receipts.map(item=><div className="tool-receipt" key={item.operation_id}><span>{item.result?(item.result.ok&&item.result.data?.passed!==false?'成功':'失败'):'执行中'}</span><code>{item.tool_name}</code><small>{item.task_id} · {item.result?.duration_seconds??'—'} 秒{item.result?.replayed?' · 已恢复记录':''}</small>{item.result?.error&&<p>{item.result.error.message}</p>}{!!item.result?.data?.changed_paths?.length&&<p>{item.result.data.changed_paths.join('、')}</p>}</div>)}{!loading&&!receipts.length&&!error&&<p>尚无工具执行记录。</p>}</details></section>
+import { API_BASE, apiFetch } from './api'
+import { useState } from 'react'
+const API = API_BASE
+export type ExecutionTask = {
+  id: string
+  title: string
+  description?: string
+  depends_on: string[]
+  status: string
+  changed_paths?: string[]
+  completion_summary?: string
+}
+type Receipt = {
+  operation_id: string
+  task_id: string
+  tool_name: string
+  status: string
+  result?: {
+    ok: boolean
+    duration_seconds?: number
+    replayed?: boolean
+    data?: { passed?: boolean; changed_paths?: string[] }
+    error?: { message: string }
+  }
+}
+export default function TaskPanel({
+  runId,
+  tasks,
+  turns,
+  limit,
+  feedback,
+}: {
+  runId: string
+  tasks: ExecutionTask[]
+  turns: number
+  limit: number
+  feedback?: string
+}) {
+  const [receipts, setReceipts] = useState<Receipt[]>([]),
+    [error, setError] = useState(''),
+    [loading, setLoading] = useState(false)
+  async function load() {
+    setLoading(true)
+    setError('')
+    try {
+      const r = await apiFetch(`${API}/runs/${runId}/tool-calls`)
+      if (!r.ok) throw new Error('暂时无法读取工具记录')
+      setReceipts(await r.json())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '读取失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+  const labels: Record<string, string> = {
+    pending: '等待依赖',
+    running: '进行中',
+    completed: '已完成',
+  }
+  return (
+    <section className="execution-panel">
+      <div className="execution-heading">
+        <b>任务执行</b>
+        <span>
+          {turns} / {limit} 步
+        </span>
+      </div>
+      <ol className="task-list">
+        {tasks.map((task) => (
+          <li key={task.id} className={'task-item ' + task.status}>
+            <div>
+              <span className="task-state">{labels[task.status] ?? task.status}</span>
+              <strong>{task.title}</strong>
+            </div>
+            {task.depends_on.length > 0 && <small>依赖：{task.depends_on.join('、')}</small>}
+            {task.completion_summary && <p>{task.completion_summary}</p>}
+            {!!task.changed_paths?.length && (
+              <small>涉及文件：{task.changed_paths.join('、')}</small>
+            )}
+          </li>
+        ))}
+      </ol>
+      {feedback && <p className="executor-feedback">{feedback}</p>}
+      <details
+        onToggle={(e) => {
+          if (e.currentTarget.open) void load()
+        }}
+      >
+        <summary>工具操作记录</summary>
+        <button className="text-button" disabled={loading} onClick={() => void load()}>
+          {loading ? '读取中…' : '刷新记录'}
+        </button>
+        {error && <p role="alert">{error}</p>}
+        {receipts.map((item) => (
+          <div className="tool-receipt" key={item.operation_id}>
+            <span>
+              {item.result
+                ? item.result.ok && item.result.data?.passed !== false
+                  ? '成功'
+                  : '失败'
+                : '执行中'}
+            </span>
+            <code>{item.tool_name}</code>
+            <small>
+              {item.task_id} · {item.result?.duration_seconds ?? '—'} 秒
+              {item.result?.replayed ? ' · 已恢复记录' : ''}
+            </small>
+            {item.result?.error && <p>{item.result.error.message}</p>}
+            {!!item.result?.data?.changed_paths?.length && (
+              <p>{item.result.data.changed_paths.join('、')}</p>
+            )}
+          </div>
+        ))}
+        {!loading && !receipts.length && !error && <p>尚无工具执行记录。</p>}
+      </details>
+    </section>
+  )
 }

@@ -73,7 +73,7 @@ BASE_FILES = {
     "src/style.css": "@import \"tailwindcss\";\n:root{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;color:#1f2937;background:#f5f7fb}body{margin:0}\n",
     "vite.config.ts": "import {defineConfig} from 'vite'\nimport react from '@vitejs/plugin-react'\nimport tailwindcss from '@tailwindcss/vite'\nexport default defineConfig({plugins:[react(),tailwindcss()]})\n",
     "tsconfig.json": "{\"compilerOptions\":{\"target\":\"ES2022\",\"useDefineForClassFields\":true,\"lib\":[\"ES2022\",\"DOM\",\"DOM.Iterable\"],\"skipLibCheck\":true,\"esModuleInterop\":true,\"allowSyntheticDefaultImports\":true,\"strict\":true,\"module\":\"ESNext\",\"moduleResolution\":\"Bundler\",\"resolveJsonModule\":true,\"isolatedModules\":true,\"noEmit\":true,\"jsx\":\"react-jsx\"},\"include\":[\"src\"]}\n",
-    "playwright.config.ts": "import {defineConfig,devices} from '@playwright/test'\nexport default defineConfig({testDir:'./tests',testIgnore:process.env.PHASE==='test'?['**/acceptance.spec.ts','**/preview.spec.ts']:[],fullyParallel:false,workers:1,timeout:30000,reporter:'line',use:{baseURL:'http://127.0.0.1:4173',trace:'retain-on-failure'},projects:[{name:'chromium',use:{...devices['Desktop Chrome']}}],webServer:{command:'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',url:'http://127.0.0.1:4173',reuseExistingServer:false,timeout:90000}})\n",
+    "playwright.config.ts": "import {defineConfig,devices} from '@playwright/test'\nexport default defineConfig({testDir:'./tests',testIgnore:process.env.PHASE==='test'?['**/acceptance.spec.ts','**/preview.spec.ts','**/standard/**']:[],fullyParallel:false,workers:1,timeout:30000,reporter:'line',use:{baseURL:'http://127.0.0.1:4173',trace:'retain-on-failure'},projects:[{name:'chromium',use:{...devices['Desktop Chrome']}}],webServer:{command:'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',url:'http://127.0.0.1:4173',reuseExistingServer:false,timeout:90000}})\n",
     "package.json": "",  # sourced from the locked worker package below
     "package-lock.json": "",  # sourced from the locked worker package below
 }
@@ -278,13 +278,15 @@ def _trim(value: str, limit: int = 12_000) -> str:
     return redact(value)[-limit:]
 
 
-def run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: Path | None = None) -> CommandResult:
+def run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: Path | None = None, image_id: str | None = None) -> CommandResult:
     from .runtime_limits import worker_slot
     with worker_slot(ROOT):
-        return _run_phase(run_id,phase,timeout,parent_database=parent_database)
+        return _run_phase(run_id,phase,timeout,parent_database=parent_database,image_id=image_id)
 
 
-def _run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: Path | None = None) -> CommandResult:
+def _run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: Path | None = None, image_id: str | None = None) -> CommandResult:
+    if image_id is not None and not re.fullmatch(r'sha256:[0-9a-f]{64}',image_id):
+        raise SandboxError('运行镜像标识无效。')
     if phase not in {"build", "test", "acceptance", "preview", "migrate", "regression", "health"}:
         raise SandboxError("请求了未授权的容器命令。")
     workspace = workspace_for(run_id)
@@ -316,7 +318,7 @@ def _run_phase(run_id: str, phase: str, timeout: int = 150, *, parent_database: 
         "--workdir=/workspace", "--user=pwuser", "--env", "HOME=/tmp/worker-home",
         "--env", "PYTHONPYCACHEPREFIX=/tmp/pa-pycache", "--env", "PYTHONDONTWRITEBYTECODE=1",
         "--env", "npm_config_cache=/tmp/npm-cache", "--env", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
-        "--env", "PLAYWRIGHT_JSON_OUTPUT_NAME=test-results/pa-regression.json", "--env", f"PHASE={phase}", "--entrypoint=/bin/bash", fullstack.IMAGE if is_fullstack else WORKER_IMAGE,
+        "--env", "PLAYWRIGHT_JSON_OUTPUT_NAME=test-results/pa-regression.json", "--env", f"PHASE={phase}", "--entrypoint=/bin/bash", image_id or (fullstack.IMAGE if is_fullstack else WORKER_IMAGE),
         "-lc", fixed_script,
     ]
     if is_fullstack:

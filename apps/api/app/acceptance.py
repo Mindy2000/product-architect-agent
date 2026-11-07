@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from . import project, runner, store, tools
+from . import project, runner, store, tools, runtime_identity
 
 router = APIRouter(prefix='/api/v1/projects')
 PROFILES = {'todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1'}
@@ -27,11 +27,13 @@ def suite_hash(profile):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def health_hash():
-    return hashlib.sha256((runner.WORKER_CONTEXT.parent/'health.spec.ts').read_bytes()).hexdigest()
+def health_hash(identifier):
+    from .page_health import fingerprint
+    return fingerprint(identifier)
 
 
-def validations(identifier, digest):
+def validations(identifier, digest, environment):
+    if environment is None:return {}
     latest = {}
     conn = tools.connect()
     try:
@@ -40,7 +42,7 @@ def validations(identifier, digest):
             if row['tool_name'] in latest:continue
             try:value = json.loads(row['result_json'] or '{}');data = value.get('data',{})
             except (ValueError,TypeError):continue
-            if not isinstance(data,dict) or data.get('digest')!=digest:continue
+            if not isinstance(data,dict) or data.get('digest')!=digest or data.get('environment_sha256')!=environment['digest']:continue
             latest[row['tool_name']] = {**data,'passed':value.get('ok') is True and data.get('passed') is True}
     finally:conn.close()
     return latest
@@ -54,8 +56,9 @@ def matrix(identifier, state=None):
     criteria = state.get('acceptance_criteria',[])
     digest = project.source_digest(files)
     profile = state.get('acceptance_profile','generated')
-    basis = hashlib.sha256(json.dumps({'source':digest,'criteria':criteria,'profile':profile,'suite_sha256':suite_hash(profile),'health_sha256':health_hash()},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
-    proof = validations(identifier,digest)
+    environment = runtime_identity.current(identifier)
+    basis = hashlib.sha256(json.dumps({'environment':environment,'source':digest,'criteria':criteria,'profile':profile,'suite_sha256':suite_hash(profile),'health_sha256':health_hash(identifier)},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    proof = validations(identifier,digest,environment)
     build = proof.get('project.build',{});test = proof.get('project.test',{})
     independent_hash = suite_hash(profile)
     independent = bool(independent_hash and test.get('passed') and test.get('profile')==profile and test.get('suite_sha256')==independent_hash)
@@ -74,13 +77,14 @@ def matrix(identifier, state=None):
         rows.append({'index':index,'text':text,'status':result,'method':entry['method'] if entry else None,'note':entry['note'] if entry else '', 'reviewed_at':entry.get('reviewed_at') if entry else None,'candidate_task_ids':candidates})
     passed = sum(item['status']=='passed' for item in rows)
     failed = sum(item['status']=='failed' for item in rows)
-    health_current = test.get('health_passed') is True and test.get('health_sha256')==health_hash()
+    health_current = test.get('health_passed') is True and test.get('health_sha256')==health_hash(identifier)
     technical = build.get('passed') is True and test_current and health_current
     confirmed = bool(rows) and passed==len(rows) and technical
-    return {'run_id':identifier,'revision':row['revision'] if row else 0,'basis_hash':basis,'source_digest':digest,
+    from .page_health import coverage
+    return {'coverage':coverage(identifier),'run_id':identifier,'revision':row['revision'] if row else 0,'basis_hash':basis,'source_digest':digest,
             'review_status':'confirmed' if confirmed else 'failed' if failed else 'pending',
             'counts':{'total':len(rows),'passed':passed,'failed':failed,'unverified':len(rows)-passed-failed},
-            'technical':{'health_passed':health_current,'build_passed':build.get('passed') is True,'test_passed':test_current,'test_kind':'independent_suite' if independent else 'generated' if test_current and profile=='generated' else 'unverified','profile':profile,'suite_sha256':independent_hash if independent else None},
+            'technical':{'environment_verified':environment is not None,'environment_sha256':environment['digest'] if environment else None,'health_passed':health_current,'build_passed':build.get('passed') is True,'test_passed':test_current,'test_kind':'independent_suite' if independent else 'generated' if test_current and profile=='generated' else 'unverified','profile':profile,'suite_sha256':independent_hash if independent else None},
             'criteria':rows,'notice':NOTICE,'manual_or_independent_confirmation_required':True,'network_requests':0}
 
 

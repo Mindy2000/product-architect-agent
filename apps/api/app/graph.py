@@ -249,8 +249,9 @@ def build_graph(checkpoint_path: Path | None = None):
         event_start = _event(state, "build", "running", "在隔离容器中运行 TypeScript 检查与 Vite 构建")
         _commit(state, {"stage": "build", "status": "running", "trace": state.get("trace", []) + [event_start]})
         if state.get('runtime_version',1)>=2:
-            from . import tools, project
-            operation=f"quality_build_{state.get('repair_round',0)}_{state.get('executor_turns',0)}_{project.manifest(state['run_id'])['digest'][:12]}"
+            from . import tools, project, runtime_identity
+            identity=runtime_identity.require(state['run_id'])['digest'][:12]
+            operation=f"quality_build_{state.get('repair_round',0)}_{state.get('executor_turns',0)}_{project.manifest(state['run_id'])['digest'][:12]}_{identity}"
             receipt=tools.execute(tools.ToolContext(state['run_id'],'quality',operation,state.get('acceptance_profile','generated')),'project.build',{})
             data=receipt.get('data',{})
             from types import SimpleNamespace
@@ -274,8 +275,11 @@ def build_graph(checkpoint_path: Path | None = None):
             target = workspace_for(state["run_id"]) / "tests" / "acceptance.spec.ts"
             target.write_text((root / "benchmarks" / (state["acceptance_profile"] + ".spec.ts")).read_text(encoding="utf-8"), encoding="utf-8")
         if state.get('runtime_version',1)>=2:
-            from . import tools, project
-            operation=f"quality_test_{state.get('repair_round',0)}_{state.get('executor_turns',0)}_{project.manifest(state['run_id'])['digest'][:12]}"
+            from . import tools, project, runtime_identity
+            identity=runtime_identity.require(state['run_id'])['digest'][:12]
+            from . import acceptance
+            checks=acceptance.health_hash(state['run_id'])[:12]+(acceptance.suite_hash(state.get('acceptance_profile','generated')) or '')[:12]
+            operation=f"quality_test_{state.get('repair_round',0)}_{state.get('executor_turns',0)}_{project.manifest(state['run_id'])['digest'][:12]}_{identity}_{checks}"
             receipt=tools.execute(tools.ToolContext(state['run_id'],'quality',operation,state.get('acceptance_profile','generated')),'project.test',{})
             data=receipt.get('data',{})
             from types import SimpleNamespace

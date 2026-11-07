@@ -1,17 +1,174 @@
-import {useState} from 'react'
-const API='http://127.0.0.1:8000/api/v1/operations'
-type Safety={secret_file_owner_only:boolean;max_active_requests:number;max_queued_runs:number;child_output_limit_bytes:number;verified:boolean}
-type Usage={name:string;bytes:number;files:number;warning?:string}
-type Event={id:number;at:string;method:string;path:string;status:number}
-export default function OperationsPanel(){
- const [safety,setSafety]=useState<Safety|null>(null)
- const [orphans,setOrphans]=useState<{id:string;name:string}[]>([]),[queue,setQueue]=useState<{run_id:string;status:string}[]>([]),[corrupt,setCorrupt]=useState<string[]>([])
- const [usage,setUsage]=useState<Usage[]>([]),[events,setEvents]=useState<Event[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[plan,setPlan]=useState<{token:string;files:{name:string;bytes:number}[];bytes:number}|null>(null)
- async function read(path:string,method='GET',body?:object){const r=await fetch(API+path,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});const value=await r.json();if(!r.ok)throw new Error(value.detail??'操作失败');return value}
- async function load(){setBusy(true);setError('');try{const data=await read('/storage');setUsage(data.items);const log=await read('/audit');setEvents(log.items);const q=await read('/queue');setQueue(q.items);const integrity=await read('/integrity');setCorrupt(integrity.corrupt_run_ids);setSafety(await read('/security'))}catch(e){setError(e instanceof Error?e.message:'读取失败')}finally{setBusy(false)}}
- async function preview(){setError('');try{setPlan(await read('/cleanup-preview','POST'))}catch(e){setError(e instanceof Error?e.message:'预览失败')}}
- async function clean(){if(!plan||!window.confirm(`只删除这 ${plan.files.length} 个过期恢复暂存文件？项目源码、交付、Git和知识库保留。`))return;setBusy(true);try{await read('/cleanup-apply','POST',{token:plan.token});setPlan(null);await load()}catch(e){setError(e instanceof Error?e.message:'清理失败')}finally{setBusy(false)}}
- async function inspectContainers(){setError('');try{setOrphans((await read('/orphan-containers')).items)}catch(e){setError(e instanceof Error?e.message:'检查失败')}}
- async function cleanupContainers(){if(!window.confirm('移除列出的孤立容器？后端会再次检查所属进程，活跃容器不会清理。'))return;try{await read('/orphan-containers/cleanup','POST',{ids:orphans.map(item=>item.id)});setOrphans([])}catch(e){setError(e instanceof Error?e.message:'清理失败')}}
- return <details className="project-maintenance" onToggle={e=>{if(e.currentTarget.open&&!usage.length&&!busy)void load()}}><summary>本地数据与操作记录</summary>{safety&&<section><h4>本地安全运行</h4><p>仅本机访问 · 无需登录 · 已接入访问来源与请求大小保护</p><p>配置文件权限：{safety.secret_file_owner_only?'仅当前用户可读写':'需要处理'}；并发请求上限 {safety.max_active_requests}；任务队列上限 {safety.max_queued_runs}；命令输出上限 {safety.child_output_limit_bytes/1024/1024} MiB。</p><p>当前显示本地运行策略，验收结果以集中验收报告为准。</p></section>}<button disabled={busy} onClick={()=>void load()}>刷新占用</button>{usage.map(item=><p key={item.name}>{item.name}：{(item.bytes/1024/1024).toFixed(2)} MiB · {item.files} 文件 {item.warning}</p>)}<p>执行队列（最多同时1个开发任务）：{queue.map(item=>item.run_id.slice(0,8)+' '+item.status).join('；')||'无等待任务'}</p>{corrupt.length>0&&<p role="alert">损坏的运行记录：{corrupt.join('、')}。当前只提示，不覆盖原记录。</p>}<button onClick={()=>void inspectContainers()}>检查孤立容器</button>{orphans.map(item=><p key={item.id}>{item.name}</p>)}{orphans.length>0&&<button onClick={()=>void cleanupContainers()}>清理列出的孤立容器</button>}<p>仅过期24小时的恢复上传ZIP可在此清理；不会自动删除项目数据。</p><button disabled={busy} onClick={()=>void preview()}>预览可清理文件</button>{plan&&<><p>可清理 {plan.files.length} 个 · {(plan.bytes/1024/1024).toFixed(2)} MiB</p><ul>{plan.files.map(file=><li key={file.name}>{file.name}</li>)}</ul><button disabled={busy||!plan.files.length} onClick={()=>void clean()}>确认清理上述暂存文件</button></>}<details><summary>最近100次修改操作</summary>{events.map(event=><p key={event.id}>{event.at} · {event.method} {event.path} · {event.status}</p>)}</details>{error&&<p role="alert">{error}</p>}</details>
+import { API_BASE, apiFetch } from './api'
+import { useState } from 'react'
+const API = API_BASE + '/operations'
+type Safety = {
+  secret_file_owner_only: boolean
+  max_active_requests: number
+  max_queued_runs: number
+  child_output_limit_bytes: number
+  verified: boolean
+}
+type Usage = { name: string; bytes: number; files: number; warning?: string }
+type Event = { id: number; at: string; method: string; path: string; status: number }
+export default function OperationsPanel() {
+  const [safety, setSafety] = useState<Safety | null>(null)
+  const [orphans, setOrphans] = useState<{ id: string; name: string }[]>([]),
+    [queue, setQueue] = useState<{ run_id: string; status: string }[]>([]),
+    [corrupt, setCorrupt] = useState<string[]>([])
+  const [usage, setUsage] = useState<Usage[]>([]),
+    [events, setEvents] = useState<Event[]>([]),
+    [error, setError] = useState(''),
+    [busy, setBusy] = useState(false),
+    [plan, setPlan] = useState<{
+      token: string
+      files: { name: string; bytes: number }[]
+      bytes: number
+    } | null>(null)
+  async function read(path: string, method = 'GET', body?: object) {
+    const r = await apiFetch(API + path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    const value = await r.json()
+    if (!r.ok) throw new Error(value.detail ?? '操作失败')
+    return value
+  }
+  async function load() {
+    setBusy(true)
+    setError('')
+    try {
+      const data = await read('/storage')
+      setUsage(data.items)
+      const log = await read('/audit')
+      setEvents(log.items)
+      const q = await read('/queue')
+      setQueue(q.items)
+      const integrity = await read('/integrity')
+      setCorrupt(integrity.corrupt_run_ids)
+      setSafety(await read('/security'))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '读取失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function preview() {
+    setError('')
+    try {
+      setPlan(await read('/cleanup-preview', 'POST'))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '预览失败')
+    }
+  }
+  async function clean() {
+    if (
+      !plan ||
+      !window.confirm(
+        `只删除这 ${plan.files.length} 个过期恢复暂存文件？项目源码、交付、Git和知识库保留。`,
+      )
+    )
+      return
+    setBusy(true)
+    try {
+      await read('/cleanup-apply', 'POST', { token: plan.token })
+      setPlan(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '清理失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function inspectContainers() {
+    setError('')
+    try {
+      setOrphans((await read('/orphan-containers')).items)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '检查失败')
+    }
+  }
+  async function cleanupContainers() {
+    if (!window.confirm('移除列出的孤立容器？后端会再次检查所属进程，活跃容器不会清理。')) return
+    try {
+      await read('/orphan-containers/cleanup', 'POST', { ids: orphans.map((item) => item.id) })
+      setOrphans([])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '清理失败')
+    }
+  }
+  return (
+    <details
+      className="project-maintenance"
+      onToggle={(e) => {
+        if (e.currentTarget.open && !usage.length && !busy) void load()
+      }}
+    >
+      <summary>本地数据与操作记录</summary>
+      {safety && (
+        <section>
+          <h4>本地安全运行</h4>
+          <p>仅本机访问 · 无需登录 · 已接入访问来源与请求大小保护</p>
+          <p>
+            配置文件权限：{safety.secret_file_owner_only ? '仅当前用户可读写' : '需要处理'}
+            ；并发请求上限 {safety.max_active_requests}；任务队列上限 {safety.max_queued_runs}
+            ；命令输出上限 {safety.child_output_limit_bytes / 1024 / 1024} MiB。
+          </p>
+          <p>当前显示本地运行策略，验收结果以集中验收报告为准。</p>
+        </section>
+      )}
+      <button disabled={busy} onClick={() => void load()}>
+        刷新占用
+      </button>
+      {usage.map((item) => (
+        <p key={item.name}>
+          {item.name}：{(item.bytes / 1024 / 1024).toFixed(2)} MiB · {item.files} 文件{' '}
+          {item.warning}
+        </p>
+      ))}
+      <p>
+        执行队列（最多同时1个开发任务）：
+        {queue.map((item) => item.run_id.slice(0, 8) + ' ' + item.status).join('；') ||
+          '无等待任务'}
+      </p>
+      {corrupt.length > 0 && (
+        <p role="alert">损坏的运行记录：{corrupt.join('、')}。当前只提示，不覆盖原记录。</p>
+      )}
+      <button onClick={() => void inspectContainers()}>检查孤立容器</button>
+      {orphans.map((item) => (
+        <p key={item.id}>{item.name}</p>
+      ))}
+      {orphans.length > 0 && (
+        <button onClick={() => void cleanupContainers()}>清理列出的孤立容器</button>
+      )}
+      <p>仅过期24小时的恢复上传ZIP可在此清理；不会自动删除项目数据。</p>
+      <button disabled={busy} onClick={() => void preview()}>
+        预览可清理文件
+      </button>
+      {plan && (
+        <>
+          <p>
+            可清理 {plan.files.length} 个 · {(plan.bytes / 1024 / 1024).toFixed(2)} MiB
+          </p>
+          <ul>
+            {plan.files.map((file) => (
+              <li key={file.name}>{file.name}</li>
+            ))}
+          </ul>
+          <button disabled={busy || !plan.files.length} onClick={() => void clean()}>
+            确认清理上述暂存文件
+          </button>
+        </>
+      )}
+      <details>
+        <summary>最近100次修改操作</summary>
+        {events.map((event) => (
+          <p key={event.id}>
+            {event.at} · {event.method} {event.path} · {event.status}
+          </p>
+        ))}
+      </details>
+      {error && <p role="alert">{error}</p>}
+    </details>
+  )
 }

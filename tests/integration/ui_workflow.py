@@ -139,6 +139,22 @@ try:
    assert project.sources(restored['run_id'])==project.sources(rid)
    passed('源码恢复为独立暂停副本，原版本保持完成')
 
+   # Delay a real panel read, then change selection before the old reply arrives.
+   run_url=f'http://127.0.0.1:8000/api/v1/runs/{rid}'
+   saved_response=page.request.get(run_url)
+   held=[]
+   page.route(run_url,lambda route:held.append(route))
+   page.get_by_role('button',name='项目记录',exact=False).first.click()
+   entry=page.locator('article.project-entry').filter(has=page.locator('small').filter(has_text=rid[:8])).first
+   entry.get_by_role('button',name='打开项目 →',exact=True).click()
+   page.get_by_role('button',name='新建开发任务',exact=False).click()
+   assert held,'delayed project read was not intercepted'
+   held[0].fulfill(response=saved_response)
+   page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+   expect(page.locator('.run-detail')).to_have_count(0)
+   page.unroute(run_url)
+   passed('旧项目读取延迟返回不会覆盖新建任务选择（真实工作台界面）')
+
    # Return to the composer without submitting another model task.
    page.get_by_role('button',name='新建开发任务',exact=False).click()
    dify_panel=page.locator('details.knowledge-library').filter(has=page.get_by_text('Dify 远程语义知识库 · 已选 0',exact=True)).first

@@ -91,12 +91,15 @@ def history(run_id: str, limit: int = 100) -> list[dict]:
 
 
 def successful_validation(run_id: str, name: str, digest: str) -> dict | None:
+    from .runtime_identity import current
+    environment = current(run_id)
+    if environment is None:return None
     connection = connect()
     try:
         rows = connection.execute('SELECT result_json FROM tool_calls WHERE run_id=? AND tool_name=? AND status=? ORDER BY completed_at DESC', (run_id, name, 'completed')).fetchall()
         for row in rows:
             result = json.loads(row['result_json'])
-            if result.get('data', {}).get('digest') == digest:
+            if result.get('data', {}).get('digest') == digest and result.get('data', {}).get('environment_sha256') == environment['digest']:
                 return result['data'] if result.get('ok') and result['data'].get('passed') else None
     finally: connection.close()
     return None
@@ -148,36 +151,43 @@ def _ready(context):
 
 
 def _build(context, args):
+    from . import runtime_identity
     digest = _ready(context)
+    environment = runtime_identity.require(context.run_id)
     cached = successful_validation(context.run_id, 'project.build', digest)
     if cached: return {**cached, 'cached':True}
-    result = runner.run_phase(context.run_id, 'build', timeout=150)
+    result = runner.run_phase(context.run_id, 'build', timeout=150, image_id=environment['image_id'])
     project.sources(context.run_id)
-    return {'digest':digest,'passed':result.exit_code == 0,'exit_code':result.exit_code,'output':result.output,'duration_seconds':result.duration_seconds}
+    runtime_identity.unchanged(context.run_id,environment)
+    return {'environment_sha256':environment['digest'],'digest':digest,'passed':result.exit_code == 0,'exit_code':result.exit_code,'output':result.output,'duration_seconds':result.duration_seconds}
 
 
 def _test(context, args):
+    from . import runtime_identity
     digest = _ready(context)
+    environment = runtime_identity.require(context.run_id)
     built = successful_validation(context.run_id, 'project.build', digest)
     if not built or not built.get('passed'):
         raise project.ProjectError('请先对当前源码执行成功的project.build。')
     cached = successful_validation(context.run_id, 'project.test', digest)
     from .acceptance import suite_hash,health_hash
+    from . import page_health
     expected_suite=suite_hash(context.acceptance_profile)
-    if cached and cached.get('profile') == context.acceptance_profile and cached.get('suite_sha256')==expected_suite and cached.get('health_sha256')==health_hash() and cached.get('health_passed') is True: return {**cached, 'cached':True}
+    if cached and cached.get('profile') == context.acceptance_profile and cached.get('suite_sha256')==expected_suite and cached.get('health_sha256')==health_hash(context.run_id) and cached.get('health_passed') is True: return {**cached, 'cached':True}
     profile = context.acceptance_profile
     if profile != 'generated':
         allowed = {'todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1'}
         if profile not in allowed: raise project.ProjectError('未知的独立验收类型。')
         content = (runner.ROOT / 'benchmarks' / (profile + '.spec.ts')).read_text(encoding='utf-8')
         runner._write_file(runner.workspace_for(context.run_id), 'tests/acceptance.spec.ts', content)
-    result = runner.run_phase(context.run_id, 'acceptance' if profile != 'generated' else 'test', timeout=120)
-    health_content=(runner.WORKER_CONTEXT.parent/'health.spec.ts').read_text()
+    health_content=page_health.script(context.run_id)
     runner._write_file(runner.workspace_for(context.run_id),'tests/standard/health.spec.ts',health_content)
-    health = runner.run_phase(context.run_id,'health',timeout=60)
+    result = runner.run_phase(context.run_id, 'acceptance' if profile != 'generated' else 'test', timeout=120, image_id=environment['image_id'])
+    health = runner.run_phase(context.run_id,'health',timeout=60, image_id=environment['image_id'])
     project.sources(context.run_id)
     if (runner.workspace_for(context.run_id)/'tests/standard/health.spec.ts').read_text()!=health_content:raise project.ProjectError('固定基础检查文件被更改，结果未采纳。')
-    return {'digest':digest,'profile':profile,'suite_sha256':expected_suite,'health_sha256':health_hash(),'health_passed':health.exit_code==0,'evidence_kind':'generated' if profile=='generated' else 'independent_suite','requirements_confirmed':False,'passed':result.exit_code == 0 and health.exit_code==0,'exit_code':result.exit_code or health.exit_code,'output':result.output+'\n固定页面基础检查（不代表需求验收）：\n'+health.output,'duration_seconds':result.duration_seconds+health.duration_seconds}
+    runtime_identity.unchanged(context.run_id,environment)
+    return {'environment_sha256':environment['digest'],'digest':digest,'profile':profile,'suite_sha256':expected_suite,'health_sha256':health_hash(context.run_id),'coverage':page_health.coverage(context.run_id),'health_passed':health.exit_code==0,'evidence_kind':'generated' if profile=='generated' else 'independent_suite','requirements_confirmed':False,'passed':result.exit_code == 0 and health.exit_code==0,'exit_code':result.exit_code or health.exit_code,'output':result.output+'\n固定页面基础检查（不代表需求验收）：\n'+health.output,'duration_seconds':result.duration_seconds+health.duration_seconds}
 
 
 def _snapshot(context, args):
@@ -273,7 +283,17 @@ def execute(context: ToolContext, name: str, arguments: dict) -> dict:
             row = connection.execute('SELECT * FROM tool_calls WHERE run_id=? AND operation_id=?', (context.run_id,context.operation_id)).fetchone()
             if row:
                 if row['fingerprint'] != fingerprint: raise project.ProjectError('操作标识与已持久化的参数不一致。')
-                if row['status'] == 'completed': return {**json.loads(row['result_json']), 'replayed':True}
+                if row['status'] == 'completed':
+                    saved = json.loads(row['result_json'])
+                    if name in {'project.build','project.test'}:
+                        from . import runtime_identity, acceptance
+                        environment = runtime_identity.current(context.run_id)
+                        data = saved.get('data',{})
+                        valid = environment is not None and data.get('environment_sha256')==environment['digest'] and data.get('digest')==project.manifest(context.run_id)['digest']
+                        if name=='project.test':
+                            valid = valid and data.get('health_sha256')==acceptance.health_hash(context.run_id) and data.get('suite_sha256')==acceptance.suite_hash(context.acceptance_profile)
+                        if not valid:return {'ok':False,'error':{'code':'stale_validation','message':'旧验证回执的源码、环境或检查内容已变化，请以新操作重新构建与测试。'}}
+                    return {**saved, 'replayed':True}
             else:
                 connection.execute('INSERT INTO tool_calls VALUES (?,?,?,?,?,?,?,NULL,?,NULL)',(context.run_id,context.operation_id,context.task_id,name,fingerprint,json.dumps(arguments,ensure_ascii=False),'running',datetime.now(timezone.utc).isoformat()))
             connection.commit()

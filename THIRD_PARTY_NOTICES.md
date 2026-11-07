@@ -18,6 +18,8 @@ The project source is licensed under MIT (see LICENSE). Third-party code and dep
 
 ## Installed dependencies and build tools
 
+Prettier 3.9.10 (MIT) is a development-only formatter, installed from npm and recorded in package-lock.json; it is not a generated-application runtime dependency.
+
 Python and npm dependencies are identified in the lockfiles and installed separately. Their respective license notices remain applicable. NSIS is a separate installer compiler; this project's MIT license does not replace NSIS or other tools' licenses.
 
 ---

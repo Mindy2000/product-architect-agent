@@ -8,17 +8,18 @@ from fastapi.testclient import TestClient
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'apps/api'))
 from app import acceptance as a,runner,project,store,tools,dify,graph,workbench_archive as archive,workbench_jobs as jobs,maintenance_errors,document_runtime
 from app.runtime_limits import worker_slot
+from app import runtime_identity
 from test_workbench import Fixture
 
 class AcceptanceTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name);self.id=str(uuid.uuid4())
-  for item in [patch.object(runner,'ROOT',self.root),patch.object(runner,'GENERATED_ROOT',self.root/'generated-projects'),patch.object(runner,'OUTPUT_ROOT',self.root/'outputs'),patch.object(store,'DATA_DIR',self.root/'data'),patch.object(store,'RUNS_DB',self.root/'data/runs.sqlite3')]:item.start();self.addCleanup(item.stop)
+  for item in [patch.object(runner,'ROOT',self.root),patch.object(runner,'GENERATED_ROOT',self.root/'generated-projects'),patch.object(runner,'OUTPUT_ROOT',self.root/'outputs'),patch.object(store,'DATA_DIR',self.root/'data'),patch.object(store,'RUNS_DB',self.root/'data/runs.sqlite3'),patch.object(runtime_identity,'current',return_value={'digest':'test-environment','image_id':'sha256:'+'a'*64})]:item.start();self.addCleanup(item.stop)
   (self.root/'benchmarks').mkdir();source=Path(__file__).resolve().parents[1]/'benchmarks/todo-v1.spec.ts';shutil.copyfile(source,self.root/'benchmarks/todo-v1.spec.ts')
   self.state={'run_id':self.id,'status':'completed','acceptance_profile':'generated','acceptance_criteria':['能够新增任务','刷新后任务仍在'],'executor_tasks':[{'id':'task-1','acceptance_indices':[0]}]};store.create_run(self.id,'synthetic',self.state,'offline');runner.initialize_workspace(self.id)
   files={name:runner.BASE_FILES[name] for name in project.REQUIRED_FILES};files['tests/e2e.spec.ts']="import {test} from '@playwright/test';test('self',()=>{})";project.import_sources(self.id,files)
  def receipt(self,kind,passed=True,**extra):
-  data={'digest':project.source_digest(project.sources(self.id)),'passed':passed,'profile':self.state['acceptance_profile'],'suite_sha256':a.suite_hash(self.state['acceptance_profile']),'health_passed':True,'health_sha256':a.health_hash(),**extra}
+  data={'environment_sha256':'test-environment','digest':project.source_digest(project.sources(self.id)),'passed':passed,'profile':self.state['acceptance_profile'],'suite_sha256':a.suite_hash(self.state['acceptance_profile']),'health_passed':True,'health_sha256':a.health_hash(self.id),**extra}
   with closing(tools.connect()) as c:c.execute('INSERT INTO tool_calls VALUES (?,?,?,?,?,?,?,?,?,?)',(self.id,str(uuid.uuid4()),'quality',kind,'fixture','{}','completed',json.dumps({'ok':True,'data':data}),'offline',str(time.time())));c.commit()
  def proof(self):self.receipt('project.build');self.receipt('project.test')
  def save(self,entries=None,**changes):
@@ -124,6 +125,7 @@ import sys,time
 from pathlib import Path
 from app import workbench_jobs as jobs
 from app.runtime_limits import worker_slot
+from app import runtime_identity
 root=Path(sys.argv[1])
 def operation(identifier,progress,cancelled):
  with worker_slot(root):

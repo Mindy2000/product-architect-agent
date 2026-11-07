@@ -305,13 +305,23 @@ def generate_json(run_id: str, stage: str, system_prompt: str, user_prompt: str,
         raise ModelCallFailed("DeepSeek 请求失败；密钥已隐藏，预留额度暂时保留以防重复超支。") from exc
 
     usage = response.usage
-    input_tokens = usage.prompt_tokens if usage else 12_000
-    output_tokens = usage.completion_tokens if usage else max_tokens
-    cost_cny = _settle(call_id, settings["model"], input_tokens, output_tokens)
+    input_tokens = getattr(usage, 'prompt_tokens', None)
+    output_tokens = getattr(usage, 'completion_tokens', None)
+    usage_known = all(type(value) is int and value >= 0 for value in (input_tokens, output_tokens))
+    if usage_known:
+        cost_cny = _settle(call_id, settings["model"], input_tokens, output_tokens)
+    else:
+        # A successful response is not evidence of its billed token count.
+        # Keep the original reservation, including on receipt replay and parse errors.
+        with _db_connection() as connection:
+            connection.execute("UPDATE model_usage SET status='usage_missing' WHERE id=?", (call_id,))
+        cost_cny = reserve
+        input_tokens = output_tokens = None
     if response.choices and response.choices[0].finish_reason == "length":
         raise ModelCallFailed(f"模型输出达到 {max_tokens} token 上限而被截断；费用已记录，请缩小任务或调整输出容量。")
     content = response.choices[0].message.content if response.choices else None
-    metadata = {"provider": settings["provider"], "model": settings["model"], "input_tokens": input_tokens, "output_tokens": output_tokens, "estimated_cost_cny": cost_cny}
+    metadata = {"provider": settings["provider"], "model": settings["model"], "input_tokens": input_tokens, "output_tokens": output_tokens, "estimated_cost_cny": cost_cny,
+                "usage_status": "reported" if usage_known else "missing_reservation_held"}
     try:
         if not content:
             raise ValueError("empty JSON response")

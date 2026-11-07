@@ -2,7 +2,15 @@
 export function publicHttpsUrl(value: string): string | undefined {
   try {
     const url = new URL(value)
-    if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) return undefined
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      (url.port && url.port !== '443')
+    )
+      return undefined
     return url.href
-  } catch { return undefined }
+  } catch {
+    return undefined
+  }
 }

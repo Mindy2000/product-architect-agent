@@ -1,13 +1,129 @@
-import {useEffect,useState} from 'react'
+import { API_BASE, apiFetch } from './api'
+import { useEffect, useState } from 'react'
 import ApplicationStorage from './ApplicationStorage'
-const API='http://127.0.0.1:8000/api/v1/projects'
-type Status={enabled:boolean;runtime_image?:string;database_exists?:boolean;schema?:unknown;last_migration?:unknown}
-export default function BackendPanel({runId,onRestored}:{runId:string;onRestored?:(id:string)=>void}){
- const [status,setStatus]=useState<Status|null>(null),[inherit,setInherit]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('')
- async function load(){const response=await fetch(`${API}/${runId}/backend`);const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'无法读取业务后端');setStatus(data)}
- useEffect(()=>{let stop=false;void fetch(`${API}/${runId}/backend`).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'后端尚未准备');if(!stop)setStatus(data)}).catch(e=>{if(!stop)setError(e instanceof Error?e.message:'读取失败')});return()=>{stop=true}},[runId])
- async function migrate(){if(!window.confirm('将关闭相关项目预览，初始化或升级其SQLite数据库。已有库先备份，仅允许新增表/可空字段；勾选后可复制父版本数据库与文件，原库保留。不会调用模型。继续吗？'))return;setBusy(true);setError('');setNotice('');try{const response=await fetch(`${API}/${runId}/backend/migrate?inherit_parent=${inherit}`,{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'迁移未完成');setNotice('数据库迁移已完成，请重新打开预览。');await load()}catch(e){setError(e instanceof Error?e.message:'迁移未完成')}finally{setBusy(false)}}
- async function buildPreview(){setBusy(true);setError('');try{const response=await fetch(`${API}/${runId}/backend/prepare-preview`,{method:'POST'});const value=await response.json();if(!response.ok)throw new Error(typeof value.detail==='string'?value.detail:'构建未完成');setNotice(value.message);onRestored?.(runId)}catch(e){setError(e instanceof Error?e.message:'构建未完成')}finally{setBusy(false)}}
- if(status&&!status.enabled)return null
- return <details className="project-maintenance"><summary>业务后端与项目数据库</summary>{status?.enabled&&<><ApplicationStorage runId={runId} onRestored={onRestored}/><p>FastAPI + SQLite · 独立容器 · 本地同源接口。测试使用临时库，交互预览使用本项目持久库。源码导出不包含业务数据。</p><p>镜像：{status.runtime_image} · 持久数据库{status.database_exists?'已存在':'尚未初始化'}。新镜像尚待后续构建和验收。</p><details><summary>已确认数据结构</summary><pre>{JSON.stringify(status.schema,null,2)}</pre></details><label><input type="checkbox" checked={inherit} disabled={busy} onChange={e=>setInherit(e.target.checked)}/>首次初始化时，显式复制父版本数据库与文件库；原库不覆盖</label><button type="button" disabled={busy} onClick={()=>void migrate()}>初始化 / 升级项目数据库</button><button type="button" disabled={busy} onClick={()=>void buildPreview()}>构建本地预览（不调用模型）</button>{!!status.last_migration&&<pre>{JSON.stringify(status.last_migration,null,2)}</pre>}</>}{notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}</details>
+const API = API_BASE + '/projects'
+type Status = {
+  enabled: boolean
+  runtime_image?: string
+  database_exists?: boolean
+  schema?: unknown
+  last_migration?: unknown
+}
+export default function BackendPanel({
+  runId,
+  onRestored,
+}: {
+  runId: string
+  onRestored?: (id: string) => void
+}) {
+  const [status, setStatus] = useState<Status | null>(null),
+    [inherit, setInherit] = useState(false),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(''),
+    [notice, setNotice] = useState('')
+  async function load() {
+    const response = await apiFetch(`${API}/${runId}/backend`)
+    const data = await response.json()
+    if (!response.ok)
+      throw new Error(typeof data.detail === 'string' ? data.detail : '无法读取业务后端')
+    setStatus(data)
+  }
+  useEffect(() => {
+    let stop = false
+    void apiFetch(`${API}/${runId}/backend`)
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok)
+          throw new Error(typeof data.detail === 'string' ? data.detail : '后端尚未准备')
+        if (!stop) setStatus(data)
+      })
+      .catch((e) => {
+        if (!stop) setError(e instanceof Error ? e.message : '读取失败')
+      })
+    return () => {
+      stop = true
+    }
+  }, [runId])
+  async function migrate() {
+    if (
+      !window.confirm(
+        '将关闭相关项目预览，初始化或升级其SQLite数据库。已有库先备份，仅允许新增表/可空字段；勾选后可复制父版本数据库与文件，原库保留。不会调用模型。继续吗？',
+      )
+    )
+      return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const response = await apiFetch(`${API}/${runId}/backend/migrate?inherit_parent=${inherit}`, {
+        method: 'POST',
+      })
+      const data = await response.json()
+      if (!response.ok)
+        throw new Error(typeof data.detail === 'string' ? data.detail : '迁移未完成')
+      setNotice('数据库迁移已完成，请重新打开预览。')
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '迁移未完成')
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function buildPreview() {
+    setBusy(true)
+    setError('')
+    try {
+      const response = await apiFetch(`${API}/${runId}/backend/prepare-preview`, { method: 'POST' })
+      const value = await response.json()
+      if (!response.ok)
+        throw new Error(typeof value.detail === 'string' ? value.detail : '构建未完成')
+      setNotice(value.message)
+      onRestored?.(runId)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '构建未完成')
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (status && !status.enabled) return null
+  return (
+    <details className="project-maintenance">
+      <summary>业务后端与项目数据库</summary>
+      {status?.enabled && (
+        <>
+          <ApplicationStorage runId={runId} onRestored={onRestored} />
+          <p>
+            FastAPI + SQLite · 独立容器 ·
+            本地同源接口。测试使用临时库，交互预览使用本项目持久库。源码导出不包含业务数据。
+          </p>
+          <p>
+            镜像：{status.runtime_image} · 持久数据库
+            {status.database_exists ? '已存在' : '尚未初始化'}。新镜像尚待后续构建和验收。
+          </p>
+          <details>
+            <summary>已确认数据结构</summary>
+            <pre>{JSON.stringify(status.schema, null, 2)}</pre>
+          </details>
+          <label>
+            <input
+              type="checkbox"
+              checked={inherit}
+              disabled={busy}
+              onChange={(e) => setInherit(e.target.checked)}
+            />
+            首次初始化时，显式复制父版本数据库与文件库；原库不覆盖
+          </label>
+          <button type="button" disabled={busy} onClick={() => void migrate()}>
+            初始化 / 升级项目数据库
+          </button>
+          <button type="button" disabled={busy} onClick={() => void buildPreview()}>
+            构建本地预览（不调用模型）
+          </button>
+          {!!status.last_migration && <pre>{JSON.stringify(status.last_migration, null, 2)}</pre>}
+        </>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      {error && <p role="alert">{error}</p>}
+    </details>
+  )
 }

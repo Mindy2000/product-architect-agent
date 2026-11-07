@@ -1,10 +1,168 @@
-import {useState} from 'react'
-const API='http://127.0.0.1:8000/api/v1/projects/source-import'
-type Preview={token:string;can_import:boolean;file_count:number;file_paths:string[];blocked:string[];warnings:string[];ignored_entries:number;dependencies:{name:string;requested:string;locked:string|null;status:string}[]}
-async function body(response:Response){const value=await response.json();if(!response.ok)throw new Error(typeof value.detail==='string'?value.detail:'导入未完成，请检查工程格式。');return value}
-export default function SourceImport({onImported}:{onImported:()=>void}){
- const [preview,setPreview]=useState<Preview|null>(null),[title,setTitle]=useState(''),[summary,setSummary]=useState(''),[routes,setRoutes]=useState('/'),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('')
- async function inspect(file:File){setPreview(null);setError('');setNotice('');setBusy(true);try{if(file.size>16*1024*1024)throw new Error('源码ZIP不能超过16MiB。');setPreview(await body(await fetch(API+'/preview',{method:'POST',body:file})))}catch(e){setError(e instanceof Error?e.message:'无法预览')}finally{setBusy(false)}}
- async function confirm(){if(!preview)return;setBusy(true);setError('');try{const value=await body(await fetch(API+'/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:preview.token,title:title.trim(),summary:summary.trim(),routes:routes.split('\n').map(value=>value.trim()).filter(Boolean)})}));setNotice(`已导入暂停项目 ${value.run_id.slice(0,8)}。在项目列表打开后，可整理方案继续维护。当前未运行代码。`);setPreview(null);onImported()}catch(e){setError(e instanceof Error?e.message:'导入失败')}finally{setBusy(false)}}
- return <details className="project-maintenance"><summary>导入现有 React 项目</summary><p>主动选择一个源码ZIP，先查看兼容性报告，再确认导入。只复制受支持的 src/tests 文本文件；原配置、安装脚本、密钥、Git 和依赖目录不导入。不会自动运行代码或调用模型。</p><label>选择源码 ZIP<input type="file" accept=".zip" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void inspect(file)}}/></label><p>最多12页、128个源码文件、源码合计2MiB。ZIP最多16MiB，先移除 node_modules 与构建产物；暂不支持多包仓库、JSX源码或图片资源导入。</p>{preview&&<><p>可导入源码 {preview.file_count} 份 · 忽略条目 {preview.ignored_entries} · 预览保留24小时</p>{preview.warnings.map((text,i)=><p key={'w'+i}>{text}</p>)}{preview.blocked.map((text,i)=><p role="alert" key={'b'+i}>{text}</p>)}<details><summary>源码文件清单</summary><ul>{preview.file_paths.map(path=><li key={path}>{path}</li>)}</ul></details><details><summary>依赖兼容性</summary><ul>{preview.dependencies.map(item=><li key={item.name}>{item.name}：原声明 {item.requested} → {item.locked?'固定版本 '+item.locked+'（待构建确认兼容）':'不在白名单'}</li>)}</ul></details><fieldset disabled={busy||!preview.can_import}><legend>填写导入项目说明</legend><label>项目名称<input value={title} maxLength={100} onChange={e=>setTitle(e.target.value)}/></label><label>已有功能与后续维护目标<textarea value={summary} minLength={10} maxLength={500} onChange={e=>setSummary(e.target.value)}/></label><label>已有页面路径（每行一条，最多12条；可含 /items/:id）<textarea value={routes} onChange={e=>setRoutes(e.target.value)}/></label><p>这些说明由你填写，不代表系统已理解或验收原工程。导入后保持暂停，继续开发前仍需确认产品方案。</p><button type="button" disabled={!title.trim()||summary.trim().length<10||!routes.trim()} onClick={()=>void confirm()}>确认复制为独立暂停项目</button></fieldset></>}{busy&&<p role="status">正在处理源码…</p>}{error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}</details>
+import { API_BASE, apiFetch } from './api'
+import { useState } from 'react'
+const API = API_BASE + '/projects/source-import'
+type Preview = {
+  token: string
+  can_import: boolean
+  file_count: number
+  file_paths: string[]
+  blocked: string[]
+  warnings: string[]
+  ignored_entries: number
+  dependencies: { name: string; requested: string; locked: string | null; status: string }[]
+}
+async function body(response: Response) {
+  const value = await response.json()
+  if (!response.ok)
+    throw new Error(
+      typeof value.detail === 'string' ? value.detail : '导入未完成，请检查工程格式。',
+    )
+  return value
+}
+export default function SourceImport({ onImported }: { onImported: () => void }) {
+  const [preview, setPreview] = useState<Preview | null>(null),
+    [title, setTitle] = useState(''),
+    [summary, setSummary] = useState(''),
+    [routes, setRoutes] = useState('/'),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(''),
+    [notice, setNotice] = useState('')
+  async function inspect(file: File) {
+    setPreview(null)
+    setError('')
+    setNotice('')
+    setBusy(true)
+    try {
+      if (file.size > 16 * 1024 * 1024) throw new Error('源码ZIP不能超过16MiB。')
+      setPreview(await body(await apiFetch(API + '/preview', { method: 'POST', body: file })))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '无法预览')
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function confirm() {
+    if (!preview) return
+    setBusy(true)
+    setError('')
+    try {
+      const value = await body(
+        await apiFetch(API + '/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: preview.token,
+            title: title.trim(),
+            summary: summary.trim(),
+            routes: routes
+              .split('\n')
+              .map((value) => value.trim())
+              .filter(Boolean),
+          }),
+        }),
+      )
+      setNotice(
+        `已导入暂停项目 ${value.run_id.slice(0, 8)}。在项目列表打开后，可整理方案继续维护。当前未运行代码。`,
+      )
+      setPreview(null)
+      onImported()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '导入失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <details className="project-maintenance">
+      <summary>导入现有 React 项目</summary>
+      <p>
+        主动选择一个源码ZIP，先查看兼容性报告，再确认导入。只复制受支持的 src/tests
+        文本文件；原配置、安装脚本、密钥、Git 和依赖目录不导入。不会自动运行代码或调用模型。
+      </p>
+      <label>
+        选择源码 ZIP
+        <input
+          type="file"
+          accept=".zip"
+          disabled={busy}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            if (file) void inspect(file)
+          }}
+        />
+      </label>
+      <p>
+        最多12页、128个源码文件、源码合计2MiB。ZIP最多16MiB，先移除 node_modules
+        与构建产物；暂不支持多包仓库、JSX源码或图片资源导入。
+      </p>
+      {preview && (
+        <>
+          <p>
+            可导入源码 {preview.file_count} 份 · 忽略条目 {preview.ignored_entries} · 预览保留24小时
+          </p>
+          {preview.warnings.map((text, i) => (
+            <p key={'w' + i}>{text}</p>
+          ))}
+          {preview.blocked.map((text, i) => (
+            <p role="alert" key={'b' + i}>
+              {text}
+            </p>
+          ))}
+          <details>
+            <summary>源码文件清单</summary>
+            <ul>
+              {preview.file_paths.map((path) => (
+                <li key={path}>{path}</li>
+              ))}
+            </ul>
+          </details>
+          <details>
+            <summary>依赖兼容性</summary>
+            <ul>
+              {preview.dependencies.map((item) => (
+                <li key={item.name}>
+                  {item.name}：原声明 {item.requested} →{' '}
+                  {item.locked ? '固定版本 ' + item.locked + '（待构建确认兼容）' : '不在白名单'}
+                </li>
+              ))}
+            </ul>
+          </details>
+          <fieldset disabled={busy || !preview.can_import}>
+            <legend>填写导入项目说明</legend>
+            <label>
+              项目名称
+              <input value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} />
+            </label>
+            <label>
+              已有功能与后续维护目标
+              <textarea
+                value={summary}
+                minLength={10}
+                maxLength={500}
+                onChange={(e) => setSummary(e.target.value)}
+              />
+            </label>
+            <label>
+              已有页面路径（每行一条，最多12条；可含 /items/:id）
+              <textarea value={routes} onChange={(e) => setRoutes(e.target.value)} />
+            </label>
+            <p>
+              这些说明由你填写，不代表系统已理解或验收原工程。导入后保持暂停，继续开发前仍需确认产品方案。
+            </p>
+            <button
+              type="button"
+              disabled={!title.trim() || summary.trim().length < 10 || !routes.trim()}
+              onClick={() => void confirm()}
+            >
+              确认复制为独立暂停项目
+            </button>
+          </fieldset>
+        </>
+      )}
+      {busy && <p role="status">正在处理源码…</p>}
+      {error && <p role="alert">{error}</p>}
+      {notice && <p role="status">{notice}</p>}
+    </details>
+  )
 }

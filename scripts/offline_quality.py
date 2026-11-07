@@ -4,7 +4,7 @@ from pathlib import Path
 import distribution
 ROOT=Path(__file__).resolve().parents[1]
 def run():
- p=argparse.ArgumentParser();p.add_argument('--output',default='outputs/offline-quality');p.add_argument('--skip-workbench',action='store_true');p.add_argument('--scenario',choices=['ui_workflow','checkpoint_restart','fullstack_roundtrip','workbench_roundtrip','regression_roundtrip']);args=p.parse_args();out=Path(args.output).resolve();out.mkdir(parents=True,exist_ok=True)
+ p=argparse.ArgumentParser();p.add_argument('--output',default='outputs/offline-quality');p.add_argument('--skip-workbench',action='store_true');p.add_argument('--scenario',choices=['ui_workflow','checkpoint_restart','fullstack_roundtrip','workbench_roundtrip','regression_roundtrip','audit_quality']);args=p.parse_args();out=Path(args.output).resolve();out.mkdir(parents=True,exist_ok=True)
  for port in (8000,5173):
   with socket.socket() as probe:
    if probe.connect_ex(('127.0.0.1',port))==0:raise SystemExit(f'Port {port} is occupied; stop your workbench before running disposable acceptance.')
@@ -18,6 +18,7 @@ def run():
   scenarios=[('ui_workflow',['--source',str(source),'--report',str(out/'workflow.json')]),('checkpoint_restart',[]),('fullstack_roundtrip',[])]
   if not args.skip_workbench:scenarios.append(('workbench_roundtrip',['--source',str(source),'--report',str(out/'workbench.json')]))
   scenarios.append(('regression_roundtrip',[]))
+  scenarios.append(('audit_quality',[]))
   for name,options in scenarios:
    if args.scenario and args.scenario!=name:continue
    started=time.monotonic();log=out/(name+'.log')

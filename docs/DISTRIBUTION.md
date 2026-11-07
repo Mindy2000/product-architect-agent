@@ -1,6 +1,6 @@
 # Product Architect Agent
 
-当前版本0.3.1。唯一状态入口：[PROJECT_STATUS](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/PROJECT_STATUS.md)。前四项收尾记录：[AUDIT_CLOSEOUT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_CLOSEOUT.md)。
+当前版本0.3.2。唯一状态入口：[PROJECT_STATUS](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/PROJECT_STATUS.md)。前四项收尾记录：[AUDIT_CLOSEOUT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_CLOSEOUT.md)。
 
 中文本地产品架构与应用开发工作台。支持需求方案确认、受控工具执行、React应用、可选FastAPI/SQLite CRUD、localStorage、文档参考/可选知识库、隔离构建与Playwright检查、有限自动修复、Git版本和源码/数据备份。
 
@@ -68,10 +68,12 @@ GitHub Actions分别在macOS和Windows构建，包含安装器回归、API启动
 - **整套工作台备份恢复**：先预览再下载，覆盖项目、方案、SQLite检查点、费用、Git历史、本地知识库、业务数据库与附件。排除.env、依赖、日志与缓存；Dify只备份本地记录，云端知识库不联网导出。先停止活动任务、关闭交互预览，再创建备份。备份包含私人业务资料，请妥善保管。
 - **集中脱敏诊断**：先预览，再下载相同快照。只导出系统/依赖版本、配置布尔状态和任务状态计数；不含Key、安装路径、需求、文档、源码或原始日志，不自动上传。
 
-工作台备份限制512MiB、单文件128MiB，恢复要求相同应用版本。上传预览24小时有效，可重新校验或移除；诊断预览10分钟有效。恢复会在当前工作台旁的 `<当前工作台目录名>-restored/<UUID>` 创建独立工作台，当前目录保留；新副本密钥为空、模型调用关闭、旧费用保留。停止旧工作台，在新目录运行安装入口，再配置和启动；恢复本身不执行生成代码或调用模型。
+工作台备份限制512MiB、单文件128MiB，恢复支持相同版本及兼容策略明确列出的升级路径，未知版本或降级会拒绝。上传预览24小时有效，可重新校验或移除；诊断预览10分钟有效。恢复会在当前工作台旁的 `<当前工作台目录名>-restored/<UUID>` 创建独立工作台，当前目录保留；新副本密钥为空、模型调用关闭、旧费用保留。停止旧工作台，在新目录运行安装入口，再配置和启动；恢复本身不执行生成代码或调用模型。
 
 ## 0.3 持续维护
 
 新增离线完整流程 CI、0.2→0.3 工作台兼容恢复、可取消维护任务、父子版本回归比较和 Dify 离线故障检查。见 [操作与边界](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/OFFLINE_QUALITY_AND_MAINTENANCE.md)。真实模型任务和 Windows 完整 Docker 验证仍暂缓，不代表已完成。
 
 0.3.1 将“执行完成”与需求逐条验收分开；新增固定页面基础检查与源码绑定的人工/独立证据记录。交付报告和ZIP内包含交付时验收快照，最新记录可从项目面板导出。运行资源一次只允许一个构建/浏览器/预览，现有容量保持不变。
+
+0.3.2修复上下文/缺失用量/项目选择竞态，验证缓存与验收绑定运行环境，固定基础检查覆盖已确认静态Hash页面。旧回执缺少环境指纹时显示待重新验证，不自动运行原项目。支持指定旧版本兼容升级，详见[AUDIT_OPTIMIZATION](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_OPTIMIZATION.md)。
