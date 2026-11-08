@@ -1,6 +1,7 @@
 import type { KnowledgeSource } from './KnowledgeLibrary'
 import type { ExecutionTask } from './TaskPanel'
 export type TraceEvent = {
+  agent_id?: string
   stage: string
   status: string
   summary: string
@@ -10,6 +11,16 @@ export type TraceEvent = {
   at?: string
 }
 export type RunRecord = {
+  orchestration_version?: number
+  active_agent?: string
+  team_steps?: number
+  review_status?: string
+  review_report?: {
+    summary: string
+    verdict: string
+    criteria: { index: number; status: string; evidence: string; files: string[] }[]
+  }
+  agent_handoffs?: { id: string; from: string; to: string; summary: string; at: string }[]
   local_data_restored?: boolean
   source_import?: boolean
   operator_assisted?: boolean

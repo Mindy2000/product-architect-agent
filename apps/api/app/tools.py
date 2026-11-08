@@ -57,6 +57,7 @@ class ToolContext:
     task_id: str
     operation_id: str
     acceptance_profile: str = 'generated'
+    agent_id: str = 'system'
 
 
 @dataclass(frozen=True)
@@ -273,8 +274,12 @@ def catalog() -> list[dict]:
 
 def execute(context: ToolContext, name: str, arguments: dict) -> dict:
     started = time.monotonic()
+    from . import team, store
+    if context.agent_id!='system' and not team.allowed(context.agent_id,name,store.get_run(context.run_id) or {}):
+        return {'ok':False,'tool':name,'operation_id':context.operation_id,'task_id':context.task_id,'agent_id':context.agent_id,'error':{'code':'role_permission_denied','message':'当前智能体没有此工具权限，操作未执行。'}}
     spec = TOOLS.get(name)
     encoded = json.dumps({'tool':name,'arguments':arguments,'profile':context.acceptance_profile},ensure_ascii=False,sort_keys=True)
+    if context.agent_id!='system':encoded += '|agent:'+context.agent_id
     fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
     with project.project_lock(context.run_id):
         connection = connect()
@@ -314,7 +319,7 @@ def execute(context: ToolContext, name: str, arguments: dict) -> dict:
                 result = {'ok':False,'error':{'code':'project_conflict','message':str(error)}}
             except Exception:
                 result = {'ok':False,'error':{'code':'tool_failed','message':'工具执行失败，内部异常和密钥未写入输出。'}}
-            result.update(tool=name,operation_id=context.operation_id,task_id=context.task_id,duration_seconds=round(time.monotonic()-started,3))
+            result.update(agent_id=context.agent_id,tool=name,operation_id=context.operation_id,task_id=context.task_id,duration_seconds=round(time.monotonic()-started,3))
             connection.execute('UPDATE tool_calls SET status=?,result_json=?,completed_at=? WHERE run_id=? AND operation_id=?',('completed',json.dumps(result,ensure_ascii=False),datetime.now(timezone.utc).isoformat(),context.run_id,context.operation_id))
             connection.commit()
             return result

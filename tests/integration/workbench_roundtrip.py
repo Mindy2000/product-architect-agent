@@ -5,7 +5,7 @@ p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argum
 sys.path.insert(0,str(SOURCE/'apps/api'));sys.path.insert(0,str(SOURCE/'scripts'))
 TEST_KEY='gui-fixture-'+uuid.uuid4().hex
 os.environ['MODEL_CALLS_ENABLED']='false';os.environ['VISION_CALLS_ENABLED']='false';os.environ.pop('MODEL_API_KEY',None)
-from app import main,runner,store,model,library,references,graph,project
+from app import main,runner,store,model,library,references,graph,project,team
 from app.designs import ProductDesign
 from contextlib import closing
 from fastapi import FastAPI
@@ -20,6 +20,7 @@ store.create_run(rid,state['user_request'],state,state['created_at']);runner.ini
 runner.apply_generated_files(rid,[{'path':'src/App.tsx','content':"export default function App(){return <main><h1>工作台灾备合成项目</h1></main>}"},{'path':'tests/e2e.spec.ts','content':"import {test,expect} from '@playwright/test';test('恢复后中文界面',async({page})=>{await page.goto('/');await expect(page.getByRole('heading',{name:'工作台灾备合成项目'})).toBeVisible()})"}])
 cp=graph.build_graph();cp.update_state({'configurable':{'thread_id':rid}},state,as_node='generation');cp.checkpointer.conn.close()
 with closing(model._connect()) as c:c.execute('INSERT INTO model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?)',(str(uuid.uuid4()),rid,'synthetic-fixture','fixture','offline',1.75,1.75,1,1,'settled','2026-11-03'));c.commit()
+team.invoke(state,'planner','backup-fixture','synthetic','synthetic',team.SpecialistDecision,100,lambda *a,**k:(team.SpecialistDecision(action='stop',summary='离线备份回执'),{}))
 # Real document indexing and direct references, all synthetic and local.
 api=FastAPI();api.include_router(library.router);api.include_router(references.router)
 with TestClient(api) as c:
@@ -84,10 +85,11 @@ assert restored
 program="""
 import json,sqlite3,sys
 from contextlib import closing
-from app import runner,store,graph,project,library,model
+from app import runner,store,graph,project,library,model,team
 rid,cid=sys.argv[1:3]
 assert model._get_settings()['enabled'] is False
 assert store.get_run(rid)['status']=='paused'
+assert team.count(rid)==1, 'agent call ledger must survive workbench backup/restore'
 assert runner.version_snapshots(rid)
 with closing(model._connect()) as c:assert abs(c.execute('SELECT SUM(actual_cny) FROM model_usage').fetchone()[0]-1.75)<.0001
 with closing(sqlite3.connect(runner.ROOT/'data/applications'/rid/'app.sqlite3')) as c:assert c.execute('SELECT value FROM fixture').fetchone()[0]=='SYNTHETIC BUSINESS DATA'

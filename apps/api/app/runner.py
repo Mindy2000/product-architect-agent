@@ -386,7 +386,7 @@ def deliver(run_id: str, state: dict[str, Any]) -> dict[str, str]:
     if spec.get('application_type')=='fullstack_crud':
         report.extend(['','## 业务后端与数据','','- FastAPI + SQLite，受控CRUD数据结构生成。','- 业务数据库按项目保存，不包含在源码ZIP或源码版本恢复内。','- 测试使用临时数据库；真实项目库初始化/升级需显式执行。'])
     if state.get('runtime_version',1) >= 2:
-        report.extend(['', '## 任务与执行', '', f"- 决策步数：{state.get('executor_turns',0)} / {state.get('execution_step_limit',40)}", f"- 本次估算费用上限：¥{state.get('run_budget_cny',5)}"])
+        report.extend(['', '## 任务与执行', '', f"- 决策步数：{state.get('team_steps',state.get('executor_turns',0))} / {state.get('execution_step_limit',40)}", f"- 本次估算费用上限：¥{state.get('run_budget_cny',5)}"])
         report.extend(f"- {task['id']} [{task['status']}] {task['title']}；依赖：{', '.join(task.get('depends_on',[])) or '无'}；修改：{', '.join(task.get('changed_paths',[])) or '无'}" for task in state.get('executor_tasks',[]))
         report.extend(['', '## 验收标准', ''])
     if state.get('operator_assisted'):
@@ -401,11 +401,19 @@ def deliver(run_id: str, state: dict[str, Any]) -> dict[str, str]:
         report.extend('- '+item['title']+' · '+item['url']+' · SHA256 '+item['sha256'] for item in web_sources)
     report.extend(["", "## 浏览器测试结果（不等同全部需求验收）", "", _trim(state.get("test_output", "未运行"), 8000), "", "## 构建结果", "", _trim(state.get("build_output", "未运行"), 8000), "", "## 自动修复记录", ""])
     report.extend(f"- {event.get('summary', '')}" for event in state.get("trace", []) if event.get("stage") == "repair")
+    team_export=None
+    if state.get('orchestration_version')==1:
+        team_export={key:state.get(key) for key in ('orchestration_version','agent_handoffs','review_report','review_basis','review_status','team_steps','execution_step_limit')}
+        team_export['notice']='智能体审查是辅助证据，不代替用户逐条验收。三个角色共享同一任务预算。'
+        report.extend(['','## 三智能体协作','',team_export['notice'],f"审查状态：{state.get('review_status','未完成')}"])
+        report.extend(f"- {item['from']} → {item['to']}：{item['summary']}" for item in state.get('agent_handoffs',[]))
+        report.extend(f"- 标准 {item['index']+1} [{item['status']}] {item['evidence']}" for item in (state.get('review_report') or {}).get('criteria',[]))
     report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
     archive_path = OUTPUT_ROOT / f"{run_id}-source.zip"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         if state.get('requirements_confirmed'):
             archive.writestr('PRODUCT_SPEC.json',json.dumps({'design_id':state.get('design_id'),'revision':state.get('design_revision'),'spec':spec,'reference_sources':reference_sources,'knowledge_sources':knowledge_sources,'web_sources':web_sources},ensure_ascii=False,indent=2))
+        if team_export:archive.writestr('AGENT_TEAM.json',json.dumps(team_export,ensure_ascii=False,indent=2))
         archive.writestr('ACCEPTANCE_EVIDENCE.json',json.dumps(evidence,ensure_ascii=False,indent=2))
         for path in _source_files(workspace):
             archive.write(path, path.relative_to(workspace).as_posix())

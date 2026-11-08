@@ -20,7 +20,7 @@ from .runner import SandboxError, worker_image_available
 from . import store, workbench, regression, acceptance
 from . import designs, references, knowledge, library, history, maintenance, operations, dify, dependencies, source_import, model_capabilities, vision, fullstack, application_storage, research
 
-app = FastAPI(title="Product Architect Agent", version="0.3.3", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Product Architect Agent", version="0.4.0", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(workbench.router)
 app.include_router(acceptance.router)
 app.include_router(regression.router)
@@ -179,7 +179,8 @@ def capabilities():
         "application_types": ["frontend","fullstack_crud"],
         "business_backend": {"framework":"fastapi","database":"sqlite","generation":"controlled_crud_schema","image_prepared":worker_image_available(fullstack.IMAGE),"local_files":True,"data_backup_restore":"independent_copy"},
         "target": {"framework": "react", "language": "typescript", "max_pages": 12, "storage": "by_application_type", "storage_modes":{"frontend":"localStorage","fullstack_crud":"project_sqlite"}},
-        "workflow": ["requirements", "planning", "project_setup", "executor", "build", "browser_test", "diagnosis", "repair", "replanning", "delivery"],
+        "agent_team": {"coordinator":"deterministic","roles":["planner","developer","reviewer"],"execution":"sequential","shared_budget":True,"single_writer":"developer"},
+        "workflow": ["requirements", "planning", "project_setup", "executor", "build", "browser_test", "review", "diagnosis", "repair", "replanning", "delivery"],
         "design_review_required": True,
         "public_research":research.capabilities(),
         "model_capabilities": model_capabilities.catalog(),
@@ -189,7 +190,8 @@ def capabilities():
         "reference_materials": {"mode":"direct_text","enabled":True,"max_selected":12},
         "rag": {"mode":"dify_cloud_optional","network_enabled":True},
         "knowledge_library": {"enabled":True,"retrieval":"local_full_text","semantic_search":False,"ocr":library.document_capabilities()},
-        "runtime_version": 2,
+        "runtime_version": 3,
+        "orchestration_version": 1,
         "tool_protocol_version": 1,
         "file_policy": {"max_files":128,"max_file_bytes":65536,"max_total_bytes":2097152,"editable_roots":["src","tests"]},
         "execution_defaults": {"step_limit":40,"run_budget_cny":5,"model_call_limit":80},
@@ -215,7 +217,8 @@ def create_run(payload: RunRequest, background_tasks: BackgroundTasks):
     now = datetime.now(timezone.utc).isoformat()
     initial = {
         "run_id": run_id,
-        "runtime_version": 2,
+        "runtime_version": 3,
+        "orchestration_version": 1,
         "design_id": run_id,
         "design_revision": proposal['revision'],
         "requirements_confirmed": True,
@@ -267,6 +270,11 @@ def public_run(state: dict) -> dict:
     if result.get('pending_executor'):
         pending = result['pending_executor']
         result['pending_executor']={'turn':pending.get('turn'),'decision':{key:value for key,value in pending.get('decision',{}).items() if key != 'arguments'}}
+    if result.get('orchestration_version')==1 and result.get('review_report'):
+        from . import team
+        try:current=team.basis(state)==state.get('review_basis')
+        except (SandboxError,OSError):current=False
+        if not current:result['review_status']='stale'
     return result
 
 

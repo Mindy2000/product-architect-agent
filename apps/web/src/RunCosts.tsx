@@ -22,6 +22,8 @@ type Costs = {
 }
 const stages: Record<string, string> = {
   requirements: '需求分析',
+  agent_planner: '产品规划智能体',
+  agent_reviewer: '审查测试智能体',
   product_design: '产品方案',
   planning: '开发规划',
   generation: '代码生成',

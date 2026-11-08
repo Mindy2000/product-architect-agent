@@ -14,6 +14,7 @@ import Versions from './Versions'
 import SourceViewer from './SourceViewer'
 import DeliveryCenter from './DeliveryCenter'
 import TaskPanel from './TaskPanel'
+import TeamPanel, { agentNames } from './TeamPanel'
 import ProjectLibrary from './ProjectLibrary'
 import EngineeringPanel from './EngineeringPanel'
 import BackendPanel from './BackendPanel'
@@ -21,7 +22,7 @@ import PublicResearch from './PublicResearch'
 import WebEvidence from './WebEvidence'
 import RunCosts from './RunCosts'
 
-const stages = ['需求分析', '开发规划', '任务开发', '构建验证', '浏览器测试', '自动修复', '交付']
+const stages = ['需求分析', '开发规划', '任务开发', '构建验证', '浏览器测试', '审查与修复', '交付']
 const API = API_BASE
 type Budget = {
   spent_cny_estimate: number
@@ -48,7 +49,7 @@ const statusText: Record<string, string> = {
   queued: '排队中',
   running: '执行中',
   completed: '执行完成',
-  failed_validation: '交付完成，技术检查未通过',
+  failed_validation: '交付完成，检查或审查未通过',
   failed: '运行失败',
   failed_model: '模型调用失败',
   failed_sandbox: '隔离环境失败',
@@ -69,6 +70,7 @@ const stageIndex: Record<string, number> = {
   browser_test: 4,
   repair: 5,
   diagnosis: 5,
+  review: 5,
   replanning: 1,
   delivery: 6,
 }
@@ -88,6 +90,7 @@ const stageText: Record<string, string> = {
   build: '构建验证',
   browser_test: '浏览器测试',
   diagnosis: '失败诊断',
+  review: '独立审查',
   replanning: '重新规划',
   repair: '自动修复',
   delivery: '交付',
@@ -240,7 +243,7 @@ export default function App() {
           model_name: selectedModel,
           acceptance_profile: acceptanceProfile,
           parent_run_id: parentRunId,
-          ...(capabilities?.runtime_version === 2
+          ...((capabilities?.runtime_version ?? 0) >= 2
             ? { run_budget_cny: runBudget, execution_step_limit: stepLimit }
             : {}),
         }),
@@ -468,7 +471,7 @@ export default function App() {
                     <option value="habits-v1">习惯独立标准验收</option>
                     <option value="reading-v1">阅读清单独立标准验收</option>
                   </select>
-                  {capabilities?.runtime_version === 2 && (
+                  {(capabilities?.runtime_version ?? 0) >= 2 && (
                     <>
                       <label htmlFor="run-budget">本次任务费用上限</label>
                       <input
@@ -537,7 +540,7 @@ export default function App() {
                     disabled={
                       request.trim().length < 10 ||
                       busy ||
-                      (capabilities?.runtime_version === 2 &&
+                      ((capabilities?.runtime_version ?? 0) >= 2 &&
                         (!Number.isFinite(runBudget) ||
                           runBudget < 0.25 ||
                           runBudget > 20 ||
@@ -732,12 +735,13 @@ export default function App() {
                           runId={run.run_id}
                           status={run.status}
                         />
+                        <TeamPanel run={run} />
                         {run.executor_tasks && (
                           <TaskPanel
                             key={run.run_id + '-tasks'}
                             runId={run.run_id}
                             tasks={run.executor_tasks}
-                            turns={run.executor_turns ?? 0}
+                            turns={run.team_steps ?? run.executor_turns ?? 0}
                             limit={run.execution_step_limit ?? 40}
                             feedback={run.executor_feedback}
                           />
@@ -788,7 +792,11 @@ export default function App() {
                             <b>运行 Trace</b>
                             {run.trace.map((item, i) => (
                               <div className="trace-row" key={item.stage + '-' + i}>
-                                ·　{stageText[item.stage] ?? item.stage}：{item.summary}
+                                ·　
+                                {item.agent_id
+                                  ? `${agentNames[item.agent_id] ?? item.agent_id} · `
+                                  : ''}
+                                {stageText[item.stage] ?? item.stage}：{item.summary}
                                 {item.estimated_cost_cny !== undefined
                                   ? '（约 ¥' + item.estimated_cost_cny.toFixed(4) + '）'
                                   : ''}
@@ -948,6 +956,9 @@ export default function App() {
                               <div>
                                 <b>{event.summary}</b>
                                 <small>
+                                  {event.agent_id
+                                    ? `${agentNames[event.agent_id] ?? event.agent_id} · `
+                                    : ''}
                                   {stageText[event.stage] ?? event.stage}
                                   {event.at
                                     ? ' · ' + new Date(event.at).toLocaleString('zh-CN')

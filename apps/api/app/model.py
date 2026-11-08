@@ -205,6 +205,8 @@ def budget_breakdown(run_id: str) -> dict:
             SUM(CASE WHEN actual_cny IS NULL THEN 1 ELSE 0 END) AS unsettled_calls,
             COALESCE(SUM(input_tokens),0) AS input_tokens,COALESCE(SUM(output_tokens),0) AS output_tokens
             FROM (SELECT CASE WHEN stage LIKE 'executor-%' THEN 'executor'
+                WHEN stage LIKE 'agent-planner-%' THEN 'agent_planner'
+                WHEN stage LIKE 'agent-reviewer-%' THEN 'agent_reviewer'
                 WHEN stage LIKE 'design-%' THEN 'product_design'
                 WHEN stage LIKE 'repair-%' THEN 'repair' ELSE stage END AS stage,
                 model,actual_cny,reserve_cny,input_tokens,output_tokens
@@ -269,6 +271,18 @@ def parse_model_json(content: str,schema: type[T]) -> T:
     elif candidate.startswith('```\n') and candidate.endswith('```'):
         candidate=candidate[4:-3].strip()
     return schema.model_validate(json.loads(candidate))
+
+
+def cached_json(run_id, stage, system_prompt, user_prompt, schema, max_tokens, model_name=None):
+    """Recover a durable response only. Never contact a provider for uncertain work."""
+    selected_model=model_name or _get_settings()['model']
+    user_prompt += "\n输出必须符合此 JSON Schema：\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)
+    import hashlib
+    fingerprint=hashlib.sha256(json.dumps({'system':system_prompt,'user':user_prompt,'model':selected_model,'max_tokens':max_tokens},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    with _db_connection() as connection:
+        receipt=connection.execute('SELECT value_json,metadata_json FROM model_receipts WHERE run_id=? AND stage=? AND fingerprint=?',(run_id,stage,fingerprint)).fetchone()
+    if receipt is None:raise ModelCallFailed('上次智能体请求没有完整回执，结果不确定；未自动重复调用，原预留费用保留。')
+    return schema.model_validate_json(receipt['value_json']),{**json.loads(receipt['metadata_json']),'replayed':True}
 
 
 def generate_json(run_id: str, stage: str, system_prompt: str, user_prompt: str, schema: type[T], max_tokens: int = 900, model_name: str | None = None) -> tuple[T, dict]:

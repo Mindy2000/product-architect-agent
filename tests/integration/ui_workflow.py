@@ -5,7 +5,7 @@ from unittest.mock import patch
 p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argument('--report',required=True);args=p.parse_args()
 SOURCE=Path(args.source).resolve();REPORT=Path(args.report).resolve();sys.path.insert(0,str(SOURCE/'apps/api'));sys.path.insert(0,str(SOURCE/'scripts'))
 os.environ['MODEL_CALLS_ENABLED']='false';os.environ['VISION_CALLS_ENABLED']='false'
-from app import main,model,designs,graph,executor,project,store,tools,dify
+from app import main,model,designs,graph,executor,project,store,tools,dify,team
 import manage,uvicorn
 from playwright.sync_api import sync_playwright,expect
 # Every actual Dify operation is forbidden; policy/restore checks below remain local.
@@ -22,10 +22,17 @@ export default function App(){const [tasks,setTasks]=useState<Task[]>(()=>JSON.p
 """
 TEST="""import {test,expect} from '@playwright/test';test('中文标题',async({page})=>{await page.goto('/');await expect(page.getByRole('heading',{name:'流程检查任务管理'})).toBeVisible()})"""
 SPEC=designs.ProductDesign.model_validate({'product_name':'流程检查任务管理','summary':'离线固定响应验证完整链路，不代表真实模型能力。','target_users':['本地个人用户'],'pages':['任务'],'core_features':['任务增删改与完成','优先级筛选和刷新持久化'],'assumptions':[],'non_goals':['账号系统'],'acceptance_criteria':['可新增任务','支持编辑删除与完成','支持优先级筛选','刷新后保留数据'],'page_details':[{'name':'任务','route':'/','purpose':'管理个人任务','sections':['任务输入','任务列表'],'interactions':['新增编辑删除','优先级筛选']}],'visual_direction':'中文简洁专业','data_notes':['浏览器localStorage']})
+def plan():return model.PlanResult.model_validate({'steps':[{'title':'实现任务','description':'实现本地任务管理和测试','depends_on':[],'acceptance_indices':[0,1,2,3]},{'title':'检查文件','description':'检查项目文件','depends_on':[1]},{'title':'保存版本','description':'保存Git版本','depends_on':[2]}]})
 first_edit=[False]
 def fake(run_id,stage,*a,**kw):
  report['scripted_stages'].append(stage)
  if stage.startswith('design-'):return SPEC,{}
+ if stage.startswith('agent-planner-'):return team.SpecialistDecision(action='submit',summary='规划冻结任务',plan=plan()),{}
+ if stage.startswith('agent-reviewer-'):
+  turn=int(stage.rsplit('-',1)[1]);ctx=json.loads(a[1])
+  if turn<=2:return team.SpecialistDecision(action='tool',summary='独立阅读实现与测试',tool='project.read_file',arguments={'path':'src/App.tsx' if turn==1 else 'tests/e2e.spec.ts'}),{}
+  ready=all(ctx['technical'].get(k) for k in ('build_passed','test_passed','health_passed','environment_verified'))
+  return team.SpecialistDecision(action='submit',summary='逐条审查完成',review=team.ReviewReport(verdict='ready_for_manual' if ready else 'changes_requested',summary='固定响应审查：技术证据有效，仍待人工确认' if ready else '修复注入的TypeScript类型错误',criteria=[team.CriterionReview(index=i,status='supported' if ready else 'gap',evidence='当前已读源码与技术结果的合成审查记录',files=['src/App.tsx']) for i in range(len(ctx['acceptance_criteria']))])),{}
  if stage=='planning':return model.PlanResult.model_validate({'steps':[{'title':'实现任务','description':'实现本地任务管理和测试','depends_on':[],'acceptance_indices':[0,1,2,3]},{'title':'检查文件','description':'检查项目文件','depends_on':[1]},{'title':'保存版本','description':'保存Git版本','depends_on':[2]}]}),{}
  if stage=='diagnosis':return model.RepairDecision(action='repair',reason='修复注入的TypeScript类型错误'),{}
  turn=int(stage.rsplit('-',1)[1]);task=None;tool=None;arguments={};action='tool'
@@ -99,7 +106,12 @@ try:
    assert state['status']=='completed',state.get('last_error')
    assert state['repair_round']==1 and state['build_status']==state['test_status']=='passed'
    assert any(e['stage']=='build' and e['status']=='failed' for e in state['trace'])
-   passed('真实容器构建失败→诊断→一次修复→标准Playwright验收通过')
+   assert state['orchestration_version']==1 and state['review_status']=='ready_for_manual'
+   assert state['team_steps']==len([x for x in report['scripted_stages'] if not x.startswith('design-')]),state
+   handoffs={(x['from'],x['to']) for x in state['agent_handoffs']}
+   assert {('planner','developer'),('developer','reviewer'),('reviewer','developer'),('reviewer','coordinator')}<=handoffs,handoffs
+   expect(page.get_by_role('region',name='三智能体协作')).to_be_visible(timeout=15000)
+   passed('三智能体规划→开发→真实构建失败→独立审查→修复→再次审查→交付，交接和共享步骤可见')
    assert (SOURCE/'generated-projects'/rid/'tests/acceptance.spec.ts').read_bytes()==(SOURCE/'benchmarks/todo-v1.spec.ts').read_bytes()
    passed('发布包内独立验收文件实际被加载执行')
 
@@ -125,6 +137,7 @@ try:
    with zipfile.ZipFile(download.path()) as z:
     assert not any('.env' in n or 'app.sqlite3' in n for n in z.namelist())
     assert json.loads(z.read('ACCEPTANCE_EVIDENCE.json'))['counts']['passed']==0
+    assert json.loads(z.read('AGENT_TEAM.json'))['review_status']=='ready_for_manual'
     assert 'tests/standard/health.spec.ts' in z.namelist()
    for kind in ['trace','git_diff','manifest','report']:
     assert page.request.get(f'http://127.0.0.1:8000/api/v1/runs/{rid}/artifact/{kind}').status==200
@@ -136,6 +149,7 @@ try:
    versions=page.request.get(f'http://127.0.0.1:8000/api/v1/runs/{rid}/versions').json()
    restored=page.request.post(f'http://127.0.0.1:8000/api/v1/runs/{rid}/restore',data={'commit':versions[0]['commit']}).json()
    assert restored['status']=='paused' and restored['parent_run_id']==rid
+   assert restored.get('orchestration_version')!=1,'restore must not introduce new model calls'
    assert project.sources(restored['run_id'])==project.sources(rid)
    passed('源码恢复为独立暂停副本，原版本保持完成')
 
