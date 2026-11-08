@@ -15,6 +15,9 @@ export type LocalJob = {
   error: string
   options: Record<string, unknown>
   result: {
+    evidence_status?: string
+    evidence_notice?: string
+    stale_reasons?: string[]
     failure?: { code: string; message: string; next_step: string }
     location?: string
     next?: string
@@ -212,6 +215,12 @@ export default function MaintenanceJob({
           {comparison && (
             <div className="regression-comparison">
               <h4>本次回归结果</h4>
+              <p role={job?.result.evidence_status === 'current' ? undefined : 'alert'}>
+                {job?.result.evidence_notice ?? '历史结果，尚未核对当前运行环境。'}
+              </p>
+              {job?.result.stale_reasons?.map((reason) => (
+                <p key={reason}>{reason}</p>
+              ))}
               {comparison.incomplete && (
                 <p role="alert">构建或测试证据不完整；零项新增回归不代表验收通过。</p>
               )}

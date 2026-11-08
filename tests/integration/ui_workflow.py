@@ -155,6 +155,55 @@ try:
    page.unroute(run_url)
    passed('旧项目读取延迟返回不会覆盖新建任务选择（真实工作台界面）')
 
+   def open_project(identifier):
+    page.get_by_role('button',name='项目记录',exact=False).first.click()
+    item=page.locator('article.project-entry').filter(has=page.locator('small').filter(has_text=identifier[:8])).first
+    item.get_by_role('button',name='打开项目 →',exact=True).click()
+   open_project(rid)
+   expect(page.locator('.run-detail')).to_be_visible()
+   expect(page.locator('.inline-state').filter(has_text=rid[:8])).to_be_visible()
+   page.locator('.run-detail > details > summary').filter(has_text='源码版本与恢复').click()
+   delayed_restore=[]
+   restore_url=run_url+'/restore'
+   late_copy=page.request.post(restore_url,data={'commit':versions[0]['commit']}).json()
+   def hold_restore(route):
+    if route.request.method=='OPTIONS':route.continue_()
+    else:delayed_restore.append(route)
+   page.route(restore_url,hold_restore)
+   page.once('dialog',lambda dialog:dialog.accept())
+   page.locator('.run-detail > details').filter(has=page.locator('summary').filter(has_text='源码版本与恢复')).first.get_by_role('button',name='恢复为暂停副本',exact=True).first.click()
+   for _ in range(100):
+    if delayed_restore:break
+    page.wait_for_timeout(20)
+   assert delayed_restore,'restore request must start before changing selection'
+   page.get_by_role('button',name='新建开发任务',exact=False).click()
+   open_project(restored['run_id'])
+   expect(page.locator('.inline-state').filter(has_text=restored['run_id'][:8])).to_be_visible()
+   assert delayed_restore
+   delayed_restore[0].fulfill(status=200,json=late_copy,headers={'Access-Control-Allow-Origin':'http://127.0.0.1:5173'})
+   page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+   expect(page.locator('.inline-state').filter(has_text=restored['run_id'][:8])).to_be_visible()
+   page.unroute(restore_url)
+   passed('A版本恢复晚返回不会覆盖后来选中的B项目')
+
+   # Synthetic running state only: no executor is scheduled, actual SSE still runs.
+   stream_id=restored['run_id'];stream_state=store.get_run(stream_id)
+   store.update_run(stream_id,{**stream_state,'status':'running'})
+   page.evaluate("""() => {window.__raceFrames=0;const Original=window.EventSource;window.EventSource=class extends Original {constructor(...args){super(...args);this.addEventListener('message',()=>window.__raceFrames++)}}}""")
+   open_project(stream_id)
+   page.wait_for_function('window.__raceFrames > 0')
+   stream_url=f'http://127.0.0.1:8000/api/v1/runs/{stream_id}'
+   stream_response=page.request.get(stream_url);before_frames=page.evaluate('window.__raceFrames');stream_reads=[]
+   page.route(stream_url,lambda route:stream_reads.append(route))
+   open_project(stream_id)
+   page.wait_for_function('(before) => window.__raceFrames > before',arg=before_frames)
+   assert stream_reads
+   stream_reads[0].fulfill(response=stream_response)
+   expect(page.locator('.run-detail')).to_be_visible()
+   expect(page.locator('.inline-state').filter(has_text=stream_id[:8])).to_be_visible()
+   page.unroute(stream_url);store.update_run(stream_id,stream_state)
+   passed('实时进度先返回不会吞掉同一运行项目的打开动作')
+
    # Return to the composer without submitting another model task.
    page.get_by_role('button',name='新建开发任务',exact=False).click()
    dify_panel=page.locator('details.knowledge-library').filter(has=page.get_by_text('Dify 远程语义知识库 · 已选 0',exact=True)).first

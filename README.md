@@ -1,6 +1,6 @@
 # Product Architect Agent
 
-当前版本0.3.2。唯一状态入口：[PROJECT_STATUS](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/PROJECT_STATUS.md)。前四项收尾记录：[AUDIT_CLOSEOUT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_CLOSEOUT.md)。
+当前版本0.3.3。唯一状态入口：[PROJECT_STATUS](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/PROJECT_STATUS.md)。前四项收尾记录：[AUDIT_CLOSEOUT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_CLOSEOUT.md)。
 
 中文本地产品架构与应用开发工作台。支持需求方案确认、受控工具执行、React应用、可选FastAPI/SQLite CRUD、localStorage、文档参考/可选知识库、隔离构建与Playwright检查、有限自动修复、Git版本和源码/数据备份。
 
@@ -77,3 +77,5 @@ GitHub Actions分别在macOS和Windows构建，包含安装器回归、API启动
 0.3.1 将“执行完成”与需求逐条验收分开；新增固定页面基础检查与源码绑定的人工/独立证据记录。交付报告和ZIP内包含交付时验收快照，最新记录可从项目面板导出。运行资源一次只允许一个构建/浏览器/预览，现有容量保持不变。
 
 0.3.2修复上下文/缺失用量/项目选择竞态，验证缓存与验收绑定运行环境，固定基础检查覆盖已确认静态Hash页面。旧回执缺少环境指纹时显示待重新验证，不自动运行原项目。支持指定旧版本兼容升级，详见[AUDIT_OPTIMIZATION](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_OPTIMIZATION.md)。
+
+0.3.3补齐异步操作选择保护、父子回归页面检查及环境证据，历史报告会明确标注是否仍适用。正式Release与Windows完整运行仍暂缓。

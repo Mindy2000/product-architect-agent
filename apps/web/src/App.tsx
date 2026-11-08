@@ -119,7 +119,17 @@ export default function App() {
   const [budget, setBudget] = useState<Budget | null>(null)
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
   const [connectionError, setConnectionError] = useState('')
-  const { run, runs, setRun, refreshRun, updateRun } = useRunSelection(refreshBudget)
+  const {
+    run,
+    runs,
+    setRun,
+    refreshRun,
+    updateRun,
+    selectionRevision,
+    isCurrentSelection,
+    receiveRun,
+    openFromAction,
+  } = useRunSelection(refreshBudget)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [pauseNotice, setPauseNotice] = useState('')
@@ -162,10 +172,12 @@ export default function App() {
     try {
       const response = await apiFetch(API + '/runs/' + run.run_id + '/cancel', { method: 'POST' })
       if (!response.ok) throw new Error('取消失败')
-      setPauseNotice('取消请求已收到，当前阶段结束后停止。')
+      if (isCurrentSelection(selectionRevision))
+        setPauseNotice('取消请求已收到，当前阶段结束后停止。')
       await updateRun(run.run_id)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '取消失败')
+      if (isCurrentSelection(selectionRevision))
+        setError(e instanceof Error ? e.message : '取消失败')
     }
   }
   async function pauseRun() {
@@ -173,9 +185,11 @@ export default function App() {
     try {
       const response = await apiFetch(API + '/runs/' + run.run_id + '/pause', { method: 'POST' })
       if (!response.ok) throw new Error('任务当前无法暂停，请刷新状态。')
-      setPauseNotice('暂停请求已收到，当前阶段完成后停止。')
+      if (isCurrentSelection(selectionRevision))
+        setPauseNotice('暂停请求已收到，当前阶段完成后停止。')
     } catch (error) {
-      setError(error instanceof Error ? error.message : '暂停失败')
+      if (isCurrentSelection(selectionRevision))
+        setError(error instanceof Error ? error.message : '暂停失败')
     }
   }
   async function startRun() {
@@ -209,6 +223,7 @@ export default function App() {
               ? data.detail
               : '无法生成产品方案，请检查需求和费用设置。',
           )
+        if (!isCurrentSelection(selectionRevision)) return
         setDesignId(data.design_id)
         setResearchEnabled(false)
         setWebSourceIds([])
@@ -235,13 +250,14 @@ export default function App() {
         throw new Error(detail?.detail?.message || '本地 Agent 返回错误（' + response.status + '）')
       }
       const created = (await response.json()) as import('./runTypes').RunRecord
+      if (!receiveRun(created, selectionRevision)) return
       setResearchEnabled(false)
       setWebSourceIds([])
-      setRun(created)
       setRequest('')
       void refreshBudget()
     } catch (e) {
-      setError(e instanceof Error ? e.message : '无法连接本地 Agent，请确认服务已启动。')
+      if (isCurrentSelection(selectionRevision))
+        setError(e instanceof Error ? e.message : '无法连接本地 Agent，请确认服务已启动。')
     } finally {
       setBusy(false)
       void refreshBudget()
@@ -260,7 +276,8 @@ export default function App() {
       }
       await updateRun(run.run_id)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '恢复失败。')
+      if (isCurrentSelection(selectionRevision))
+        setError(e instanceof Error ? e.message : '恢复失败。')
     } finally {
       setBusy(false)
       void refreshBudget()
@@ -550,10 +567,16 @@ export default function App() {
               </section>
               {capabilities?.design_review_required && (
                 <DesignStudio
+                  key={selectionRevision + ':' + designId}
                   designId={designId}
-                  onSelect={setDesignId}
+                  onSelect={(id) => {
+                    setRun(null)
+                    setDesignId(id)
+                  }}
                   onStarted={(id) => {
-                    void refreshRun(id).catch(() => setError('开发任务已创建，暂时无法读取进度。'))
+                    void openFromAction(id, selectionRevision).catch(() => {
+                      setError('开发任务已创建，暂时无法读取进度。')
+                    })
                     void refreshBudget()
                   }}
                   onCostChanged={() => void refreshBudget()}
@@ -613,9 +636,9 @@ export default function App() {
                             key={run.run_id + '-backend'}
                             runId={run.run_id}
                             onRestored={(id) => {
-                              void refreshRun(id).catch(() =>
-                                setError('数据副本已建立，请从项目记录打开。'),
-                              )
+                              void openFromAction(id, selectionRevision).catch(() => {
+                                setError('数据副本已建立，请从项目记录打开。')
+                              })
                             }}
                           />
                         )}
@@ -782,10 +805,10 @@ export default function App() {
                         )}
                         {isTerminal && (
                           <Versions
+                            key={selectionRevision}
                             runId={run.run_id}
                             onRestored={(next) => {
-                              setRun(next)
-                              setParentRunId(null)
+                              if (receiveRun(next, selectionRevision)) setParentRunId(null)
                             }}
                           />
                         )}

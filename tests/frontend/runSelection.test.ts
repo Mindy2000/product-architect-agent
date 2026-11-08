@@ -38,3 +38,20 @@ test('transport preserves cancellation and never retries failed mutations',async
   await assert.rejects(apiFetch('http://127.0.0.1:8000'),{name:'AbortError'})
  }finally{globalThis.fetch=original}
 })
+
+test('a stream frame supersedes data without cancelling the same selection navigation',()=>{
+ const gate=new RunSelection();gate.begin('A',true);const open=gate.begin('A',true)
+ gate.begin('A')
+ assert.equal(gate.visible(open),false);assert.equal(gate.selected(open),true)
+ gate.begin('B',true);assert.equal(gate.selected(open),false)
+})
+test('operation completion cannot select after switching away and back or starting new',()=>{
+ const gate=new RunSelection();gate.begin('A',true);const action=gate.revision
+ gate.begin('B',true);assert.equal(gate.current(action),false)
+ gate.begin('A',true);assert.equal(gate.current(action),false)
+ const second=gate.revision;gate.clear();assert.equal(gate.current(second),false)
+})
+test('stream progress does not invalidate an operation on the current selection',()=>{
+ const gate=new RunSelection();gate.begin('A',true);const action=gate.revision
+ gate.begin('A');assert.equal(gate.current(action),true)
+})

@@ -1,5 +1,5 @@
 """Local import evidence and baseline-vs-change regression, always in disposable containers."""
-import json,os,posixpath,re,shutil,subprocess,sys,time,uuid
+import hashlib,json,os,posixpath,re,shutil,subprocess,sys,time,uuid
 from pathlib import Path
 from . import runner,store,project,workbench_archive as archive
 from .process_control import run_bounded
@@ -56,16 +56,48 @@ def plan(identifier):
  analysis['criteria_candidates']=[{'index':link['criterion'],'text':criteria[link['criterion']],'basis':'人工追溯关联与受影响文件相交'} for link in links if link['criterion']<len(criteria) and set(link['files'])&set(analysis['affected_files'])]
  return {'run_id':identifier,'parent_run_id':parent['run_id'],'analysis':analysis,'before_digest':project.source_digest(before),'after_digest':project.source_digest(after),'profiles':{'baseline':parent.get('acceptance_profile','generated'),'current':current.get('acceptance_profile','generated')},'mode':'两份独立副本完整构建与测试；结果按测试身份比较，不执行用户原配置脚本','model_calls':0}
 
+def validation_basis(identifier):
+ from . import acceptance,page_health,runtime_identity
+ state=store.get_run(identifier)
+ if not state:raise runner.SandboxError('回归项目不存在。')
+ environment=runtime_identity.require(identifier)
+ profile=state.get('acceptance_profile','generated')
+ return {'version':1,'source_digest':project.source_digest(project.sources(identifier)),
+         'environment':environment,'profile':profile,'suite_sha256':acceptance.suite_hash(profile),
+         'health_sha256':page_health.fingerprint(identifier),
+         'execution':{name:hashlib.sha256((Path(__file__).parent/name).read_bytes()).hexdigest()
+                      for name in ('regression.py','regression_worker.py')}}
+
+
+def evidence_status(report):
+ """Annotate a snapshot on read; never rewrite or silently rerun historical evidence."""
+ if not report.get('available'):return report
+ reasons=[];status='current'
+ if not report.get('validation_basis') or not report.get('run_ids'):
+  status='historical';reasons.append('旧报告缺少运行环境或检查规则记录')
+ else:
+  for label in ('baseline','current'):
+   try:
+    current=validation_basis(report['run_ids'][label])
+    if current!=report['validation_basis'].get(label):
+     status='stale';reasons.append(('基线' if label=='baseline' else '当前版本')+'的源码、检查规则或运行环境已变化')
+   except (runner.SandboxError,OSError,KeyError,ValueError):
+    if status!='stale':status='unverified'
+    reasons.append(('基线' if label=='baseline' else '当前版本')+'目前无法核对')
+ return {**report,'evidence_status':status,'current_evidence':status=='current','stale_reasons':reasons,
+         'evidence_notice':'这是当前输入与环境的回归证据，不等于逐条需求验收。' if status=='current' else '历史结果保留，目前不能作为当前通过证据；不会自动重跑。'}
+
+
 @router.get('/{run_id}/regression-plan')
 def regression_plan(run_id:uuid.UUID):return plan(str(run_id))
 @router.get('/{run_id}/regression-result')
 def regression_result(run_id:uuid.UUID):
  if not store.get_run(str(run_id)):raise HTTPException(404,'项目不存在。')
  path=archive.safe_path(runner.ROOT,'data/projects/'+str(run_id)+'/regression-latest.json')
- return json.loads(path.read_text()) if path.is_file() else {'available':False}
+ return evidence_status(json.loads(path.read_text())) if path.is_file() else {'available':False}
 
 def execute_job(root,identifier,job_id,progress,cancelled):
- evidence=plan(identifier);directory=archive.safe_path(root,'data/workbench/jobs/'+job_id);directory.mkdir(parents=True,mode=0o700,exist_ok=True)
+ evidence=plan(identifier);evidence['validation_basis']={'baseline':validation_basis(evidence['parent_run_id']),'current':validation_basis(identifier)};directory=archive.safe_path(root,'data/workbench/jobs/'+job_id);directory.mkdir(parents=True,mode=0o700,exist_ok=True)
  options=directory/'regression-input.json';options.write_text(json.dumps(evidence));options.chmod(0o600);log=directory/'regression.log'
  env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','LANG','LC_ALL','SYSTEMROOT','DOCKER_CONFIG'}};env.update(MODEL_CALLS_ENABLED='false',VISION_CALLS_ENABLED='false',PYTHONUTF8='1',PYTHONPATH=str(root/'apps/api'),PA_DOCKER_CONTEXT=runner.DOCKER_CONTEXT)
  with log.open('wb') as stream:
@@ -90,5 +122,7 @@ def execute_job(root,identifier,job_id,progress,cancelled):
    finally:shutil.rmtree(directory/'scratch',ignore_errors=True)
  result=json.loads((directory/'regression-result.json').read_text())
  if project.source_digest(project.sources(identifier))!=evidence['after_digest'] or project.source_digest(project.sources(evidence['parent_run_id']))!=evidence['before_digest']:raise archive.ArchiveError('检查期间源文件有变化，结果未保存，请重新检查。','source_changed')
+ checked=evidence_status(result)
+ if not checked['current_evidence']:raise archive.ArchiveError('检查期间输入或运行环境已变化，结果未采纳，请重新检查。','source_changed')
  project.atomic_json(project.metadata_dir(identifier)/'regression-latest.json',result)
- return result
+ return checked

@@ -17,8 +17,14 @@ export class RunSelection {
   latest(ticket: RunTicket): boolean {
     return this.requests.get(ticket.id) === ticket.request
   }
+  selected(ticket: RunTicket): boolean {
+    return this.id === ticket.id && this.revision === ticket.selection
+  }
+  current(revision: number): boolean {
+    return this.revision === revision
+  }
   visible(ticket: RunTicket): boolean {
-    return this.latest(ticket) && this.id === ticket.id && this.revision === ticket.selection
+    return this.latest(ticket) && this.selected(ticket)
   }
   clear(): void {
     this.id = null

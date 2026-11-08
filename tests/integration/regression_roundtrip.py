@@ -1,6 +1,7 @@
 """Disposable source-only fixture: a deliberate browser regression and scoped cancellation."""
 import json,os,sys,time,uuid
 from pathlib import Path
+from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'apps/api'))
 os.environ['MODEL_CALLS_ENABLED']='false';os.environ['VISION_CALLS_ENABLED']='false'
 from app import runner,store,project,regression,workbench_archive as archive
@@ -9,10 +10,11 @@ assert ROOT.name=='source','Only run from the disposable offline quality workspa
 ids=[str(uuid.uuid4()),str(uuid.uuid4())]
 original={}
 for index,identifier in enumerate(ids):
- state={'run_id':identifier,'status':'completed','acceptance_profile':'generated','acceptance_criteria':['标题保持一致'],'product_spec':{'application_type':'frontend'},'parent_run_id':ids[0] if index else None}
+ state={'run_id':identifier,'status':'completed','acceptance_profile':'generated','acceptance_criteria':['标题保持一致'],'product_spec':{'application_type':'frontend','page_details':[{'route':'/'},{'route':'/settings'}]},'parent_run_id':ids[0] if index else None}
  store.create_run(identifier,'synthetic maintenance comparison',state,'offline')
  runner.initialize_workspace(identifier)
  files={'src/style.css':'body{margin:0}', 'src/App.tsx':"export default function App(){return <h1>"+('原始标题' if index==0 else '故意破坏标题')+"</h1>}",'tests/e2e.spec.ts':"import {test,expect} from '@playwright/test';test('标题不变',async({page})=>{await page.goto('/');await expect(page.getByRole('heading',{name:'原始标题',exact:true})).toBeVisible({timeout:1000})})"}
+ files['src/App.tsx']="export default function App(){return location.hash==='#/settings'?<main style={{minWidth:"+('0' if index==0 else '1800')+"}}><h1>设置</h1></main>:<h1>"+('原始标题' if index==0 else '故意破坏标题')+"</h1>}"
  files={**{name:runner.BASE_FILES[name] for name in project.REQUIRED_FILES},**files}
  runner.apply_generated_files(identifier,[{'path':k,'content':v} for k,v in files.items()]);project.import_sources(identifier,files);original[identifier]=project.source_digest(project.sources(identifier))
 job=str(uuid.uuid4())
@@ -23,7 +25,14 @@ except Exception:
  raise
 assert result['baseline']['build']==result['current']['build']=='passed',result
 assert result['baseline']['test']=='passed' and result['current']['test']=='failed',result
-assert len(result['comparison']['regressions'])==1,result
+assert len(result['comparison']['regressions'])==3,result
+assert sum('/#/settings' in name for name in result['comparison']['regressions'])==2,result
+assert result['current_evidence'] and result['baseline']['environment']['image_id'].startswith('sha256:')
+assert result['current']['coverage']['routes']==['/','/#/settings']
+from app import runtime_identity
+with patch.object(runtime_identity,'current',return_value={'digest':'changed','image_id':'sha256:'+'b'*64}):
+ assert regression.regression_result(uuid.UUID(ids[1]))['evidence_status']=='stale'
+assert regression.regression_result(uuid.UUID(ids[1]))['current_evidence']
 assert all(project.source_digest(project.sources(i))==original[i] for i in ids)
 assert not (ROOT/'data/workbench/jobs'/job/'scratch').exists()
 # Cancellation after the worker has started must kill only this maintenance job's containers.

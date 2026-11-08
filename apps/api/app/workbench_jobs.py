@@ -53,6 +53,9 @@ def read(root,identifier):
  with closing(connect(root)) as c:row=c.execute('SELECT * FROM tasks WHERE id=?',(str(uuid.UUID(str(identifier))),)).fetchone()
  if row is None:return None
  value=dict(row);value['options']=json.loads(value['options']);value['result']=json.loads(value['result'] or '{}')
+ if value['kind']=='regression' and value['result'].get('available'):
+  from .regression import evidence_status
+  value['result']=evidence_status(value['result'])
  value['elapsed_seconds']=round(max(0,(value['ended'] or time.time())-(value['started'] or value['created'])),1)
  value['progress_percent']=int(100*value['done']/max(1,value['total']));value['can_cancel']=value['status'] in {'queued','running'} and value['phase'] not in {'提交独立副本','备份完成'}
  artifact=archive.safe_path(root,'data/workbench/jobs/artifacts/'+value['id']+'.zip');value['artifact_available']=artifact.is_file() and not artifact.is_symlink()

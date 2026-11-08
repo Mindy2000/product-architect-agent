@@ -31,15 +31,32 @@ export function useRunSelection(onTerminal: () => void) {
       try {
         const next = await apiJson<RunRecord>('/runs/' + id)
         if (gate.current.latest(ticket)) remember(next)
-        if (!gate.current.visible(ticket)) return null
-        display(next)
-        return next
+        if (gate.current.visible(ticket)) display(next)
+        // A newer stream frame replaces data, not the user's navigation intent.
+        return gate.current.selected(ticket)
       } catch (error) {
-        if (!gate.current.visible(ticket)) return null
+        if (!gate.current.latest(ticket)) return gate.current.selected(ticket)
+        if (!gate.current.selected(ticket)) return false
         throw error
       }
     },
     [remember],
+  )
+  const isCurrentSelection = useCallback((revision: number) => gate.current.current(revision), [])
+  const receiveRun = useCallback(
+    (next: RunRecord, revision: number) => {
+      if (!gate.current.current(revision)) {
+        remember(next)
+        return false
+      }
+      setRun(next)
+      return true
+    },
+    [remember, setRun],
+  )
+  const openFromAction = useCallback(
+    (id: string, revision: number) => read(id, gate.current.current(revision)),
+    [read],
   )
   const refreshRun = useCallback((id: string) => read(id, true), [read])
   const updateRun = useCallback((id: string) => read(id, false), [read])
@@ -87,5 +104,15 @@ export function useRunSelection(onTerminal: () => void) {
       source.close()
     }
   }, [selectionRevision, run?.run_id, run ? terminalStates.has(run.status) : true, remember])
-  return { run, runs, setRun, refreshRun, updateRun }
+  return {
+    run,
+    runs,
+    setRun,
+    refreshRun,
+    updateRun,
+    selectionRevision,
+    isCurrentSelection,
+    receiveRun,
+    openFromAction,
+  }
 }

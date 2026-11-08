@@ -20,7 +20,7 @@ from .runner import SandboxError, worker_image_available
 from . import store, workbench, regression, acceptance
 from . import designs, references, knowledge, library, history, maintenance, operations, dify, dependencies, source_import, model_capabilities, vision, fullstack, application_storage, research
 
-app = FastAPI(title="Product Architect Agent", version="0.3.2", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Product Architect Agent", version="0.3.3", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(workbench.router)
 app.include_router(acceptance.router)
 app.include_router(regression.router)

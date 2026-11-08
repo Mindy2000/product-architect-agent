@@ -2,11 +2,13 @@
 import json,os,shutil,sys,uuid
 from pathlib import Path
 os.environ['MODEL_CALLS_ENABLED']='false';os.environ['VISION_CALLS_ENABLED']='false'
-from . import runner,store,project,regression,container_owner,workbench_archive as archive
+from . import runner,store,project,regression,container_owner,page_health,runtime_identity,workbench_archive as archive
 ROOT=runner.ROOT
 
 def main():
  identifier=str(uuid.UUID(sys.argv[1]));container_owner.LABELS.extend(['--label','pa.maintenance='+identifier]);directory=archive.safe_path(ROOT,'data/workbench/jobs/'+identifier);options=json.loads((directory/'regression-input.json').read_text());states=[store.get_run(options['parent_run_id']),store.get_run(options['run_id'])];sources=[project.sources(state['run_id']) for state in states]
+ for label,state in zip(('baseline','current'),states):
+  if regression.validation_basis(state['run_id'])!=options['validation_basis'][label]:raise runner.SandboxError('回归输入或环境已变化。')
  lab=directory/'scratch';lab.mkdir(exist_ok=False)
  for name in ['templates','runtime/fullstack']:
   shutil.copytree(ROOT/name,lab/name)
@@ -22,11 +24,20 @@ def main():
    profile=state.get('acceptance_profile','generated');workspace=runner.workspace_for(rid)
    config=workspace/'playwright.config.ts';text=config.read_text().replace("reporter:'line'","reporter:[['line'],['json',{outputFile:'test-results/pa-regression.json'}]]");config.write_text(text)
    if profile in regression.PROFILES:runner._write_file(workspace,'tests/acceptance.spec.ts',(ROOT/'benchmarks'/(profile+'.spec.ts')).read_text())
-   progress('构建');built=runner.run_phase(rid,'build');result={'build':'passed' if built.exit_code==0 else 'failed','test':'skipped','tests':{},'test_source_digest':project.source_digest({str(p.relative_to(workspace)):p.read_text() for p in (workspace/'tests').rglob('*.ts')})}
+   health_script=page_health.script(rid);runner._write_file(workspace,'tests/standard/health.spec.ts',health_script)
+   environment=runtime_identity.require(rid)
+   expected=options['validation_basis']['baseline' if index==0 else 'current']['environment']
+   if environment['image_id']!=expected['image_id']:raise runner.SandboxError('回归镜像在准备期间已变化。')
+   progress('构建');built=runner.run_phase(rid,'build',image_id=environment['image_id']);runtime_identity.unchanged(rid,environment);result={'build':'passed' if built.exit_code==0 else 'failed','test':'skipped','tests':{},'test_source_digest':project.source_digest({str(p.relative_to(workspace)):p.read_text() for p in (workspace/'tests').rglob('*.ts')})}
    if built.exit_code==0:
-    progress('浏览器测试');tested=runner.run_phase(rid,'regression',timeout=180);parsed=regression.test_results(workspace/'test-results/pa-regression.json');result.update(test='passed' if tested.exit_code==0 and parsed else 'failed',tests=parsed,report_available=bool(parsed))
+    progress('浏览器测试');tested=runner.run_phase(rid,'regression',timeout=180,image_id=environment['image_id']);parsed=regression.test_results(workspace/'test-results/pa-regression.json');result.update(test='passed' if tested.exit_code==0 and parsed else 'failed',tests=parsed,report_available=bool(parsed))
+   runtime_identity.unchanged(rid,environment)
+   if (workspace/'tests/standard/health.spec.ts').read_text()!=health_script:raise runner.SandboxError('固定页面检查被更改。')
+   for name,content in files.items():
+    if (workspace/name).read_text()!=content:raise runner.SandboxError('回归源码在执行期间被更改。')
+   result.update(environment=environment,coverage=page_health.coverage(rid),health_sha256=page_health.fingerprint(rid))
    results.append(result)
-  report={'available':True,'baseline':results[0],'current':results[1],'comparison':regression.compare(*results),'source_digests':{'baseline':options['before_digest'],'current':options['after_digest']},'original_sources_preserved':True,'model_calls':0,'profiles':options['profiles']}
+  report={'available':True,'run_ids':{'baseline':options['parent_run_id'],'current':options['run_id']},'validation_basis':options['validation_basis'],'baseline':results[0],'current':results[1],'comparison':regression.compare(*results),'source_digests':{'baseline':options['before_digest'],'current':options['after_digest']},'original_sources_preserved':True,'model_calls':0,'profiles':options['profiles']}
   project.atomic_json(directory/'regression-result.json',report)
  finally:shutil.rmtree(lab,ignore_errors=True)
 if __name__=='__main__':main()
