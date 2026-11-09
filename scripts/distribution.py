@@ -10,7 +10,7 @@ LIMIT=64*1024*1024
 ROOT=Path(__file__).resolve().parents[1]
 _spec=importlib.util.spec_from_file_location('pa_release_policy',ROOT/'apps/api/app/release_policy.py');_policy=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(_policy)
 compatibility=_policy.compatibility
-PUBLIC_DOCS={'INTERACTIVE_EXPANSION.md','MULTI_AGENT.md','SETUP.md','DISTRIBUTION.md','WORKBENCH_MAINTENANCE.md','OFFLINE_QUALITY_AND_MAINTENANCE.md','PROJECT_STATUS.md','AUDIT_CLOSEOUT.md','AUDIT_OPTIMIZATION.md'}
+PUBLIC_DOCS={'COLLABORATION_EVOLUTION.md','INTERACTIVE_EXPANSION.md','MULTI_AGENT.md','SETUP.md','DISTRIBUTION.md','WORKBENCH_MAINTENANCE.md','OFFLINE_QUALITY_AND_MAINTENANCE.md','PROJECT_STATUS.md','AUDIT_CLOSEOUT.md','AUDIT_OPTIMIZATION.md'}
 BENCHMARKS={name+'.spec.ts' for name in ('todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1')}
 ROOT_FILES={'README.md','.env.example','.gitignore','.gitattributes','package.json','package-lock.json','requirements.txt','requirements.lock','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md'}
 SOURCE_DIRS={'apps/api/app','apps/web/src','templates','runtime','tests','scripts','.github/workflows'}

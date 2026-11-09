@@ -1,6 +1,6 @@
 # Product Architect Agent
 
-当前版本0.5.0。唯一状态入口：[PROJECT_STATUS](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/PROJECT_STATUS.md)。前四项收尾记录：[AUDIT_CLOSEOUT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_CLOSEOUT.md)。
+当前版本0.6.0。唯一状态入口：[PROJECT_STATUS](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/PROJECT_STATUS.md)。前四项收尾记录：[AUDIT_CLOSEOUT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_CLOSEOUT.md)。
 
 中文本地产品架构与应用开发工作台。支持需求方案确认、统一调度与产品规划/开发/审查测试三个专业智能体、受控工具执行、React应用、可选FastAPI/SQLite CRUD、localStorage、文档参考/可选知识库、隔离构建与Playwright检查、有限自动修复、Git版本和源码/数据备份。
 
@@ -89,3 +89,7 @@ GitHub Actions分别在macOS和Windows构建，包含安装器回归、API启动
 ## 0.5 六项使用能力
 
 页面点选修改、开发中澄清、项目长期规则、三套能力模板、本地视觉回归和离线质量/成本评测已接入。模板创建草稿、保存规则/意见和截图比较均不调用模型；开始开发、生成修改方案及继续任务仍遵循原费用开关和预算。评测使用固定响应，不代表真实模型能力。详见 [六项扩展说明](docs/INTERACTIVE_EXPANSION.md)。
+
+### 0.6 协作深化
+
+新增协作资料归档与引用保护、意见状态闭环、按范围选择规则、桌面/手机固定数据视觉对照、自定义版本化源码模板、显式元素源码定位、故障注入离线评测及执行记录/固定决策分支比较。完整边界与使用说明见 [COLLABORATION_EVOLUTION](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/COLLABORATION_EVOLUTION.md)。真实模型任务、Windows完整验证和正式Release继续暂缓。

@@ -4,6 +4,10 @@ import { terminalStates } from './runTypes'
 import { useEffect, useState } from 'react'
 import WorkbenchCenter from './WorkbenchCenter'
 import ProductPreview from './ProductPreview'
+import CustomTemplate from './CustomTemplate'
+import ExecutionReplay from './ExecutionReplay'
+import EvidenceManager from './EvidenceManager'
+import RuleSelection, { type RuleChoice } from './RuleSelection'
 import CollaborationPanel from './CollaborationPanel'
 import TemplatePicker from './TemplatePicker'
 import DesignStudio from './DesignStudio'
@@ -117,6 +121,7 @@ export default function App() {
     parent: string
     ids: string[]
   } | null>(null)
+  const [ruleChoice, setRuleChoice] = useState<{ parent: string; value: RuleChoice } | null>(null)
   const [parentRunId, setParentRunId] = useState<string | null>(null)
   const [acceptanceProfile, setAcceptanceProfile] = useState('generated')
   const [runBudget, setRunBudget] = useState(5),
@@ -218,6 +223,7 @@ export default function App() {
             model_name: selectedModel,
             acceptance_profile: acceptanceProfile,
             parent_run_id: parentRunId,
+            rule_selection: ruleChoice?.parent === parentRunId ? ruleChoice.value : undefined,
             annotation_ids:
               annotationSelection?.parent === parentRunId ? annotationSelection.ids : [],
             reference_ids: referenceIds,
@@ -576,6 +582,13 @@ export default function App() {
                 </div>
                 {error && <div className="inline-state error">{error}</div>}
               </section>
+              {parentRunId && (
+                <RuleSelection
+                  key={parentRunId}
+                  runId={parentRunId}
+                  onChange={(value) => setRuleChoice({ parent: parentRunId, value })}
+                />
+              )}
               <TemplatePicker
                 key={selectionRevision}
                 disabled={busy || !!parentRunId}
@@ -848,6 +861,12 @@ export default function App() {
                         {isTerminal && (
                           <DeliveryCenter key={run.run_id + '-delivery'} runId={run.run_id} />
                         )}
+                        <CustomTemplate
+                          key={selectionRevision + '-custom-template'}
+                          runId={run.run_id}
+                        />
+                        <ExecutionReplay key={selectionRevision + '-replay'} runId={run.run_id} />
+                        <EvidenceManager key={selectionRevision + '-records'} runId={run.run_id} />
                         <CollaborationPanel
                           key={selectionRevision + '-collaboration'}
                           runId={run.run_id}

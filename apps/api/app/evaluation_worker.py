@@ -35,5 +35,7 @@ def main():
                          'mechanism_passed':result['status']==expected and result.get('build_status')=='passed' and result.get('test_status')=='passed',
                          'build':result.get('build_status'),'test':result.get('test_status'),'review':result.get('review_status'),'steps':result.get('team_steps',0),
                          'repair_rounds':result.get('repair_round',0),'estimated_cost_cny':0,'provider_calls':0,'seconds':round(time.monotonic()-started,2),'environment':runtime_identity.require(rid)})
-    project.atomic_json(runner.ROOT/'outputs/evaluation-result.json',{'suite':'local-collaboration-v1','mode':'deterministic_offline','provider_calls':0,'cases':rows,'passed':all(x['mechanism_passed'] for x in rows),'notice':'固定响应和内置源码，检查协作/预算交接/构建测试，不测量真实模型生成成功率。'})
+    from .evaluation_faults import run as faults
+    rows.extend(faults(rid))
+    project.atomic_json(runner.ROOT/'outputs/evaluation-result.json',{'suite':'local-collaboration-v2','mode':'deterministic_offline','provider_calls':0,'cases':rows,'passed':all(x['mechanism_passed'] for x in rows),'notice':'固定响应和内置源码，检查协作/预算交接/构建测试，不测量真实模型生成成功率。'})
 if __name__=='__main__':main()

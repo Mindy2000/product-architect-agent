@@ -2267,3 +2267,30 @@ header {
   opacity: 0.5;
   cursor: default;
 }
+
+.expansion-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 28rem;
+  overflow: auto;
+  background: #f4f6fa;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+}
+.expansion-panel .source-editor {
+  min-height: 220px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.replay-timeline {
+  max-height: 480px;
+  overflow: auto;
+  border-left: 2px solid #d8e1ef;
+  margin: 18px 0;
+  padding-left: 28px;
+}
+.replay-timeline li {
+  margin: 10px 0;
+  padding-left: 8px;
+}

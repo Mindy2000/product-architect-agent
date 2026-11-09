@@ -1,14 +1,26 @@
 """Local preview evidence, user-selected feedback, and explicit visual baselines."""
-import base64,hashlib,io,json,uuid
+import base64,hashlib,io,json,uuid,functools
 from fastapi import APIRouter,HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel,ConfigDict,Field
-from . import collaboration as c,runner,project,preview,runtime_identity
+from . import collaboration as c,runner,project,preview,runtime_identity,source_mapping
 from .workbench_archive import safe_path
 router=APIRouter(prefix='/api/v1/collaboration/projects')
 
 def folder(identifier):
     path=safe_path(runner.ROOT,'data/projects/'+str(uuid.UUID(str(identifier)))+'/visuals');path.mkdir(parents=True,exist_ok=True);return path
+
+def rollback_images(fn):
+    @functools.wraps(fn)
+    def wrapped(identifier,*args,**kwargs):
+        c.require(identifier)
+        directory=folder(str(identifier));before=set(directory.glob('*.png'))
+        try:return fn(identifier,*args,**kwargs)
+        except Exception:
+            for path in set(directory.glob('*.png'))-before:
+                if not path.is_symlink():path.unlink(missing_ok=True)
+            raise
+    return wrapped
 
 def capture(identifier,selection=False):
     c.require(identifier)
@@ -31,12 +43,12 @@ def save_image(identifier,name,encoded):
     raw=base64.b64decode(encoded,validate=True)
     if len(raw)>4*1024**2:raise HTTPException(409,'截图超过4MiB上限。')
     with Image.open(io.BytesIO(raw)) as im:
-        if im.format!='PNG' or im.size!=(1000,720):raise HTTPException(409,'预览截图尺寸或格式异常。')
+        if im.format!='PNG' or im.size not in {(1000,720),(390,844)}:raise HTTPException(409,'预览截图尺寸或格式异常。')
     directory=folder(identifier)
     if sum(p.stat().st_size for p in directory.glob('*.png'))+len(raw)>32*1024**2:raise HTTPException(409,'本项目视觉证据达到32MiB上限。')
     path=safe_path(runner.ROOT,str((directory/(name+'.png')).relative_to(runner.ROOT)));path.write_bytes(raw);return name
 
-def metadata(frame):return {k:frame[k] for k in ('source_digest','environment','preview_policy','width','height','route')}
+def metadata(frame):return {**{k:frame[k] for k in ('source_digest','environment','preview_policy','width','height','route')},'visual_settings':frame.get('visual_settings',{})}
 
 class NoteInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -44,15 +56,17 @@ class NoteInput(BaseModel):
     comparison_id:uuid.UUID|None=None
 
 @router.post('/{identifier}/notes')
+@c.serialized
+@rollback_images
 def add_note(identifier:uuid.UUID,payload:NoteInput):
     rid=str(identifier);frame=capture(rid,not payload.comparison_id);comparison=None
     if payload.comparison_id:
         comparison=next((v for v in c.records(rid,'comparison') if v['id']==str(payload.comparison_id)),None)
         if not comparison or comparison['current']['source_digest']!=frame['source_digest']:raise HTTPException(409,'视觉比较记录不存在或已过期。')
-    if len(c.records(rid,'note'))>=40:raise HTTPException(409,'项目意见达到40条上限。')
-    selected=frame.get('selection') or {};text=selected.get('text','')[:120]
-    candidates=[path for path,body in project.sources(rid).items() if text and text in body][:8]
-    value={'id':str(uuid.uuid4()),'comment':payload.comment,'selection':selected,'candidates':candidates,'mapping':'文本匹配候选，需开发智能体读取核对','created_at':c.now(),**metadata(frame),'comparison_id':str(payload.comparison_id) if comparison else None}
+    if sum(not x.get('archived') for x in c.records(rid,'note'))>=40:raise HTTPException(409,'项目意见达到40条上限。')
+    selected=frame.get('selection') or {};association=source_mapping.associate(project.sources(rid),selected)
+    candidates=association['candidates']
+    value={'id':str(uuid.uuid4()),'comment':payload.comment,'selection':selected,'candidates':candidates,'association':association,'revision':1,'status':'pending','status_history':[],'mapping':association['notice'],'created_at':c.now(),**metadata(frame),'comparison_id':str(payload.comparison_id) if comparison else None}
     value['image']=save_image(rid,value['id'],frame['image']);return c.insert(rid,'note',value)
 
 @router.get('/{identifier}/evidence')
@@ -62,7 +76,7 @@ def evidence(identifier:uuid.UUID):
     digest=project.manifest(rid)['digest'];environment=runtime_identity.current(rid)
     policy=hashlib.sha256((runner.ROOT/'runtime/preview-worker.cjs').read_bytes()).hexdigest()
     comparisons=[{**v,'current_evidence':v['current']['source_digest']==digest and environment is not None and v['current']['environment']==environment and v['current']['preview_policy']==policy} for v in c.records(rid,'comparison')]
-    return {'notes':c.records(rid,'note'),'baselines':c.records(root,'baseline'),'comparisons':comparisons}
+    return {'notes':[v for v in c.records(rid,'note') if not v.get('archived')],'baselines':[v for v in c.records(root,'baseline') if not v.get('archived')],'comparisons':[v for v in comparisons if not v.get('archived')]}
 
 def freeze_notes(parent,ids):
     if not ids:return []
@@ -71,7 +85,7 @@ def freeze_notes(parent,ids):
     notes={x['id']:x for x in c.records(str(parent),'note')};digest=project.manifest(str(parent))['digest'];result=[]
     for identifier in ids:
         item=notes.get(str(identifier))
-        if not item or item['source_digest']!=digest:raise HTTPException(409,'页面意见不属于原项目或源码已变化，请重新点选。')
+        if not item or item.get('archived') or item.get('status')=='closed' or item['source_digest']!=digest:raise HTTPException(409,'页面意见不属于原项目或源码已变化，请重新点选。')
         result.append({k:v for k,v in item.items() if k not in {'environment','preview_policy'}})
     return result
 
@@ -81,10 +95,12 @@ class BaselineInput(BaseModel):
     confirmed:bool=False
 
 @router.post('/{identifier}/baselines')
+@c.serialized
+@rollback_images
 def baseline(identifier:uuid.UUID,payload:BaselineInput):
     if not payload.confirmed:raise HTTPException(422,'请明确确认当前页面作为比较基线。')
     rid=str(identifier);scope=c.lineage(rid)
-    if len(c.records(scope,'baseline'))>=20:raise HTTPException(409,'项目谱系基线达到20条上限。')
+    if sum(not x.get('archived') for x in c.records(scope,'baseline'))>=20:raise HTTPException(409,'项目谱系基线达到20条上限。')
     frame=capture(rid);value={'id':str(uuid.uuid4()),'run_id':rid,'label':payload.label,'created_at':c.now(),**metadata(frame)}
     value['image']=save_image(rid,value['id'],frame['image']);return c.insert(scope,'baseline',value,20)
 
@@ -94,25 +110,35 @@ class CompareInput(BaseModel):
     tolerance:int=Field(default=16,ge=0,le=64)
 
 
-def difference(left,right,tolerance):
+def difference(left,right,tolerance,settings=None):
     from PIL import Image,ImageChops
     a=Image.open(left).convert('RGB');b=Image.open(right).convert('RGB')
     if a.size!=b.size:raise HTTPException(409,'截图尺寸不同，不能比较。')
     delta=ImageChops.difference(a,b);mask=delta.convert('L').point(lambda p:255 if p>tolerance else 0)
-    ratio=sum(mask.histogram()[1:])/(a.width*a.height)
+    from PIL import ImageDraw
+    settings=settings or {};area=Image.new('L',a.size,0 if settings.get('region') else 255);draw=ImageDraw.Draw(area)
+    def box(r):return (r['x'],r['y'],r['x']+r['width']-1,r['y']+r['height']-1)
+    if settings.get('region'):draw.rectangle(box(settings['region']),fill=255)
+    for r in settings.get('masks',[]):draw.rectangle(box(r),fill=0)
+    pixels=sum(area.histogram()[1:])
+    if not pixels:raise HTTPException(422,'遮罩覆盖了整个比较区域，请缩小遮罩。')
+    mask=ImageChops.multiply(mask,area);ratio=sum(mask.histogram()[1:])/pixels
     overlay=b.copy();overlay.paste(Image.new('RGB',b.size,'#ff3355'),mask=mask);out=io.BytesIO();overlay.save(out,format='PNG')
     return ratio,base64.b64encode(out.getvalue()).decode()
 
 @router.post('/{identifier}/compare')
+@c.serialized
+@rollback_images
 def compare(identifier:uuid.UUID,payload:CompareInput):
     rid=str(identifier);frame=capture(rid);base=next((x for x in c.records(c.lineage(rid),'baseline') if x['id']==str(payload.baseline_id)),None)
-    if not base:raise HTTPException(404,'基线不存在。')
+    if not base or base.get('archived'):raise HTTPException(404,'基线不存在。')
+    if base.get('visual_settings',{})!=frame.get('visual_settings',{}):raise HTTPException(409,'视觉测试数据、遮罩或区域不同，请使用基线的相同设置。')
     if any(base[k]!=frame[k] for k in ('route','width','height','environment','preview_policy')):raise HTTPException(409,'页面、尺寸或固定环境不同，不能进行有效视觉比较。')
-    if len(c.records(rid,'comparison'))>=20:raise HTTPException(409,'本项目比较记录达到20条上限。')
+    if sum(not x.get('archived') for x in c.records(rid,'comparison'))>=20:raise HTTPException(409,'本项目比较记录达到20条上限。')
     value={'id':str(uuid.uuid4()),'baseline':base,'current':metadata(frame),'created_at':c.now(),'tolerance':payload.tolerance}
     value['image']=save_image(rid,value['id'],frame['image'])
-    ratio,png=difference(folder(base['run_id'])/(base['image']+'.png'),folder(rid)/(value['image']+'.png'),payload.tolerance)
-    value.update(changed_ratio=round(ratio,6),diff_image=save_image(rid,value['id']+'-diff',png),meaning='仅像素变化；页面数据、焦点、滚动和动态内容也可能产生差异，不等于缺陷或验收结论。')
+    ratio,png=difference(folder(base['run_id'])/(base['image']+'.png'),folder(rid)/(value['image']+'.png'),payload.tolerance,frame.get('visual_settings'))
+    value.update(changed_ratio=round(ratio,6),diff_image=save_image(rid,value['id']+'-diff',png),meaning='仅像素变化；设置已绑定截图；未启用独立视觉模式时，页面数据、焦点和动态内容也可能产生差异，不等于缺陷或验收结论。')
     return c.insert(rid,'comparison',value,20)
 
 @router.get('/{identifier}/images/{name}')

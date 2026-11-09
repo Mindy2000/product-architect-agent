@@ -40,6 +40,22 @@ export default function EvaluationCenter() {
     [job, setJob] = useState(''),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
+  const [left, setLeft] = useState(''),
+    [right, setRight] = useState(''),
+    [comparison, setComparison] = useState<{
+      same_suite: boolean
+      notice: string
+      rows: {
+        case: string
+        strategy: string
+        before_passed: boolean
+        after_passed: boolean
+        seconds_delta: number
+        comparable: boolean
+      }[]
+      added: string[][]
+      removed: string[][]
+    } | null>(null)
   async function refresh() {
     setData(await apiJson<Data>('/evaluations'))
   }
@@ -65,7 +81,7 @@ export default function EvaluationCenter() {
       <h2>质量与成本评测</h2>
       <p>{data?.notice || '固定响应评测不调用付费模型。'}</p>
       <p>
-        离线套件：任务管理、报名表单、仪表盘。比较40步标准策略与8步限额策略；使用独立副本顺序构建和测试，请先关闭预览并暂停开发。
+        离线套件：任务管理、报名表单、仪表盘。比较40步标准策略与8步限额策略；另含坏参数、过期证据、澄清中断、规则冲突和无进展修复五项故障注入。使用独立副本顺序构建和测试，请先关闭预览并暂停开发。
       </p>
       <button
         disabled={busy || !!job}
@@ -93,6 +109,58 @@ export default function EvaluationCenter() {
           }}
         />
       )}
+      <details>
+        <summary>比较软件版本的离线报告</summary>
+        {[
+          ['基准报告', left, setLeft],
+          ['对照报告', right, setRight],
+        ].map(([label, value, setter]) => (
+          <label key={String(label)}>
+            {String(label)}
+            <select
+              value={String(value)}
+              onChange={(e) => (setter as (value: string) => void)(e.target.value)}
+            >
+              <option value="">请选择</option>
+              {data?.saved_reports.map((r) => (
+                <option key={r.id} value={r.id}>
+                  v{r.source_version} · {new Date(r.created_at).toLocaleString('zh-CN')}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+        <button
+          disabled={!left || !right || left === right || busy}
+          onClick={async () => {
+            try {
+              setComparison(await apiJson('/evaluations/compare?left=' + left + '&right=' + right))
+            } catch (e) {
+              setError(e instanceof Error ? e.message : '报告比较失败')
+            }
+          }}
+        >
+          比较报告
+        </button>
+        {comparison && (
+          <>
+            <p>{comparison.notice}</p>
+            <p>
+              新增 {comparison.added.map((v) => v.join(' / ')).join('、') || '无'}；移除{' '}
+              {comparison.removed.map((v) => v.join(' / ')).join('、') || '无'}
+            </p>
+            {comparison.rows.map((r) => (
+              <p key={r.case + r.strategy}>
+                {r.case} · {r.strategy}：{r.before_passed ? '通过' : '未通过'} →{' '}
+                {r.after_passed ? '通过' : '未通过'} ·{' '}
+                {r.comparable
+                  ? '条件一致，耗时差 ' + r.seconds_delta + ' 秒'
+                  : '套件或环境不同，不作性能结论'}
+              </p>
+            ))}
+          </>
+        )}
+      </details>
       {data?.saved_reports
         .slice()
         .reverse()
@@ -122,8 +190,16 @@ export default function EvaluationCenter() {
                   {r.cases.map((x) => (
                     <tr key={x.case + x.strategy}>
                       <td>
-                        {{ tasks: '任务管理', form: '报名表单', dashboard: '仪表盘' }[x.case] ??
-                          x.case}
+                        {{
+                          tasks: '任务管理',
+                          form: '报名表单',
+                          dashboard: '仪表盘',
+                          malformed_arguments: '工具坏参数',
+                          stale_evidence: '过期证据',
+                          clarification_interrupt: '澄清中断',
+                          rule_conflict: '规则冲突',
+                          no_progress_repair: '无进展修复',
+                        }[x.case] ?? x.case}
                       </td>
                       <td>
                         {{ 'standard-40': '标准 · 40步', 'bounded-8': '限额 · 8步' }[x.strategy] ??

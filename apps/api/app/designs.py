@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import store, references, library, research
 from .scope import MAX_PAGES
+from .collaboration import RuleSelection,serialized
 from .crud_schema import CrudSchema, validate_evolution
 from .model import ProductSpec, generate_json, budget_status, BudgetExceeded, ModelNotConfigured, ModelCallFailed
 
@@ -51,6 +52,7 @@ class DesignRequest(BaseModel):
     request: str = Field(min_length=10,max_length=5000)
     model_name: Literal['deepseek-flash','deepseek-v4-pro'] = 'deepseek-flash'
     parent_run_id: uuid.UUID | None = None
+    rule_selection: RuleSelection = Field(default_factory=RuleSelection)
     annotation_ids: list[uuid.UUID] = Field(default_factory=list,max_length=8)
     acceptance_profile: Literal['generated','todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1'] = 'generated'
     execution_step_limit: int = Field(default=40,ge=8,le=64)
@@ -174,6 +176,7 @@ def capture_knowledge(local_ids,remote_ids,query):
 
 
 @router.post('')
+@serialized
 def create_design(payload: DesignRequest, background_tasks: BackgroundTasks):
     if payload.parent_run_id:
         parent = store.get_run(str(payload.parent_run_id))
@@ -181,7 +184,7 @@ def create_design(payload: DesignRequest, background_tasks: BackgroundTasks):
         if payload.application_type!=(parent.get('product_spec') or {}).get('application_type','frontend'):raise HTTPException(409,'维护任务须沿用原应用类型。')
     from . import collaboration,page_feedback
     selected=page_feedback.freeze_notes(payload.parent_run_id,payload.annotation_ids)
-    project_rules=collaboration.freeze_rules(payload.parent_run_id)
+    project_rules=collaboration.freeze_rules(payload.parent_run_id,payload.rule_selection.rule_ids,payload.rule_selection.model_dump())
     if payload.web_source_ids and not payload.research_enabled:raise HTTPException(422,'请先允许本任务使用公开网页资料。')
     try:web_snapshot=research.freeze([str(item) for item in payload.web_source_ids]) if payload.research_enabled else []
     except research.ResearchError as error:raise HTTPException(409,str(error)) from error
@@ -292,6 +295,8 @@ def claim(design_id: str, revision: int, initial: dict):
         value['history'].append({'at':initial['created_at'],'action':'confirmed','revision':revision})
         _write(conn,value)
         conn.execute('INSERT INTO runs VALUES (?,?,?,?)',(design_id,initial['user_request'],json.dumps(initial,ensure_ascii=False),initial['created_at']))
+        from .collaboration_lifecycle import adopt_in_transaction
+        adopt_in_transaction(conn,initial)
         conn.commit()
     finally: conn.close()
 

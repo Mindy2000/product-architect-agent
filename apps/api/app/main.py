@@ -20,8 +20,14 @@ from .runner import SandboxError, worker_image_available
 from . import store, workbench, regression, acceptance
 from . import designs, references, knowledge, library, history, maintenance, operations, dify, dependencies, source_import, model_capabilities, vision, fullstack, application_storage, research
 
-app = FastAPI(title="Product Architect Agent", version="0.5.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Product Architect Agent", version="0.6.0", docs_url=None, redoc_url=None, openapi_url=None)
 from . import collaboration,page_feedback,capability_templates,evaluation
+from . import execution_replay
+app.include_router(execution_replay.router)
+from . import custom_templates
+app.include_router(custom_templates.router)
+from . import collaboration_lifecycle
+app.include_router(collaboration_lifecycle.router)
 app.include_router(collaboration.router)
 app.include_router(page_feedback.router)
 app.include_router(capability_templates.router)
@@ -192,6 +198,7 @@ def capabilities():
     from .model import _get_settings
     settings = _get_settings()
     return {
+        "application_version": app.version,
         "application_types": ["frontend","fullstack_crud"],
         "business_backend": {"framework":"fastapi","database":"sqlite","generation":"controlled_crud_schema","image_prepared":worker_image_available(fullstack.IMAGE),"local_files":True,"data_backup_restore":"independent_copy"},
         "target": {"framework": "react", "language": "typescript", "max_pages": 12, "storage": "by_application_type", "storage_modes":{"frontend":"localStorage","fullstack_crud":"project_sqlite"}},
@@ -493,8 +500,11 @@ def restore_version(run_id: str, payload: RestoreRequest, background_tasks: Back
     return initial
 
 
+from .visual_policy import VisualPolicy
+
 class PreviewAction(BaseModel):
-    action: Literal["click","inspect","type","key","scroll","reload","snapshot"]
+    visual: VisualPolicy | None = None
+    action: Literal["click","inspect","type","key","scroll","reload","snapshot","configure"]
     x: int = Field(default=0, ge=0, le=1000)
     y: int = Field(default=0, ge=-2000, le=2000)
     text: str = Field(default="", max_length=500)
@@ -513,6 +523,7 @@ def open_product_preview(run_id: str):
 
 @app.post("/api/v1/runs/{run_id}/preview/action")
 def product_preview_action(run_id: str, payload: PreviewAction):
+    if payload.action=='configure' and payload.visual is None:raise HTTPException(422,'缺少视觉设置。')
     from .preview import act
     try:return act(run_id,payload.model_dump())
     except SandboxError as error:raise HTTPException(status_code=409,detail=str(error))

@@ -72,6 +72,7 @@ def install_log_redaction():
 
 
 def body_limit(path):
+    if path in {'/api/v1/custom-templates','/api/v1/custom-templates/preview'}:return 4*1024*1024
     if path=='/api/v1/workbench/backups/preview':return 512*1024*1024
     if path=='/api/v1/application-data/preview':return 512*1024*1024
     if path=='/api/v1/recovery/preview':return 64*1024*1024

@@ -34,6 +34,15 @@ export default function TemplatePicker({
       gone = true
     }
   }, [])
+  useEffect(() => {
+    const refresh = () => {
+      void apiJson<Template[]>('/templates')
+        .then(setItems)
+        .catch((e) => setError(e.message))
+    }
+    window.addEventListener('templates-changed', refresh)
+    return () => window.removeEventListener('templates-changed', refresh)
+  }, [])
   return (
     <details className="expansion-panel">
       <summary>从能力模板开始</summary>

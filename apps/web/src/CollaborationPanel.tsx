@@ -7,6 +7,9 @@ type Rule = {
   content: string
   source: string
   active: boolean
+  scope_type?: string
+  targets?: string[]
+  constraints?: Record<string, string>
   history: { revision: number; content: string; active: boolean; updated_at: string }[]
 }
 type Question = {
@@ -36,6 +39,9 @@ export default function CollaborationPanel({
     [answer, setAnswer] = useState(''),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
+  const [scopeType, setScopeType] = useState('project'),
+    [targets, setTargets] = useState(''),
+    [constraints, setConstraints] = useState('{}')
   const base = '/collaboration/projects/' + runId
   async function refresh() {
     const [a, b] = await Promise.all([
@@ -157,6 +163,9 @@ export default function CollaborationPanel({
                   setTitle(r.title)
                   setContent(r.content)
                   setSource(r.source)
+                  setScopeType(r.scope_type || 'project')
+                  setTargets((r.targets || []).join(','))
+                  setConstraints(JSON.stringify(r.constraints || {}))
                 }}
               >
                 编辑
@@ -169,6 +178,9 @@ export default function CollaborationPanel({
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
+                        scope_type: r.scope_type || 'project',
+                        targets: r.targets || [],
+                        constraints: r.constraints || {},
                         title: r.title,
                         content: r.content,
                         source: r.source,
@@ -206,6 +218,29 @@ export default function CollaborationPanel({
           />
         </label>
         <label>
+          适用范围
+          <select value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
+            <option value="project">整个项目</option>
+            <option value="page">指定页面</option>
+            <option value="feature">指定功能</option>
+            <option value="task">指定任务</option>
+          </select>
+        </label>
+        {scopeType !== 'project' && (
+          <label>
+            精确范围标记（逗号分隔）
+            <input value={targets} onChange={(e) => setTargets(e.target.value)} maxLength={1200} />
+          </label>
+        )}
+        <label>
+          可检查的结构化字段（可留空对象，例如 {`{"primary_color":"blue"}`}）
+          <textarea
+            value={constraints}
+            onChange={(e) => setConstraints(e.target.value)}
+            maxLength={3000}
+          />
+        </label>
+        <label>
           规则来源
           <input value={source} onChange={(e) => setSource(e.target.value)} maxLength={200} />
         </label>
@@ -217,6 +252,15 @@ export default function CollaborationPanel({
                 method: editing ? 'PUT' : 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                  scope_type: scopeType,
+                  targets:
+                    scopeType === 'project'
+                      ? []
+                      : targets
+                          .split(',')
+                          .map((v) => v.trim())
+                          .filter(Boolean),
+                  constraints: JSON.parse(constraints),
                   title,
                   content,
                   source,

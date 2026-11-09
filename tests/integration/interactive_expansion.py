@@ -40,7 +40,7 @@ try:
  with sync_playwright() as pw:
   browser=pw.chromium.launch(headless=True)
   try:
-   page=browser.new_page(viewport={'width':1440,'height':1000});page.on('pageerror',lambda e:errors.append(str(e)));page.goto('http://127.0.0.1:5173');page.wait_for_load_state('networkidle')
+   page=browser.new_page(viewport={'width':1440,'height':1000});page.on('pageerror',lambda e:errors.append(str(e)));page.goto('http://127.0.0.1:5173');page.wait_for_load_state('networkidle');assert not errors,errors
    page.screenshot(path=str(ROOT/'outputs/offline-expansion-initial.png'),full_page=True)
    page.locator('summary').filter(has_text='从能力模板开始').click();page.locator('.template-grid article').filter(has=page.get_by_role('heading',name='任务管理',exact=True)).get_by_role('button',name='创建可编辑方案').click()
    expect(page.get_by_label('产品名称',exact=True)).to_have_value('任务管理');assert not calls;check('模板直接创建可编辑方案，不调用模型')
@@ -75,6 +75,8 @@ try:
    changed=compare(uuid.UUID(rid),CompareInput(baseline_id=evid['baselines'][0]['id']));assert changed['changed_ratio']>0;check('页面内容变化产生可定位视觉差异')
    page.screenshot(path=str(ROOT/'outputs/offline-expansion-desktop.png'),full_page=True)
    page.locator('.interactive-preview').screenshot(path=str(ROOT/'outputs/offline-expansion-preview.png'))
+   from evolution_checks import run as evolution_checks
+   evolution_checks(page,rid,api,ROOT,check)
    page.get_by_label('将这里的标题改成更清晰的说明').check();page.get_by_role('button',name='将选中意见带入修改需求').click()
    page.get_by_role('button',name='生成产品方案 →').click();expect(page.get_by_label('产品名称',exact=True)).to_have_value('任务管理')
    latest=designs.list_designs()[0];assert latest['project_rules'][0]['revision']==2 and latest['selected_annotations'];check('页面意见和确认规则冻结到增量方案')
@@ -89,7 +91,7 @@ try:
     if job['status'] in {'completed','failed','cancelled','interrupted'}:break
     page.wait_for_timeout(500)
    assert job['status']=='completed',job
-   result=job['result'];assert result['passed'] and len(result['cases'])==6,result
+   result=job['result'];assert result['passed'] and len(result['cases'])==11,result
    expect(page.locator('summary').filter(has_text='机制检查通过')).to_be_visible(timeout=15000);page.locator('summary').filter(has_text='机制检查通过').click()
    page.locator('.expansion-panel').filter(has=page.get_by_role('heading',name='质量与成本评测')).screenshot(path=str(ROOT/'outputs/offline-expansion-evaluation.png'))
    check('界面启动三模板×两策略离线评测，真实容器构建测试与报告查看')
@@ -101,7 +103,7 @@ try:
  restored=archive.restore(ROOT,backup,str(uuid.uuid4()));destination=Path(restored['location'])
  with sqlite3.connect(destination/'data/runs.sqlite3') as conn:
   kinds={row[0] for row in conn.execute('SELECT DISTINCT kind FROM collaboration_records')}
- assert {'rule','question','note','baseline','comparison','evaluation'}<=kinds,kinds
+ assert {'rule','question','note','baseline','comparison','evaluation','template','replay'}<=kinds,kinds
  assert list((destination/'data/projects'/rid/'visuals').glob('*.png'))
  check('整套备份恢复保留规则、回答、页面意见、视觉图片与评测报告')
  report.update(passed=True,errors=errors,evaluation=result);(ROOT/'outputs/offline-interactive-expansion.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))

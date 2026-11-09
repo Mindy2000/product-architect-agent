@@ -7,6 +7,9 @@ router=APIRouter(prefix='/api/v1/templates')
 IDS=('tasks','form','dashboard')
 
 def load(identifier):
+    if identifier.startswith('custom-'):
+        from .custom_templates import load as custom_load
+        return custom_load(identifier)
     if identifier not in IDS:raise HTTPException(404,'能力模板不存在。')
     path=runner.ROOT/'templates/capabilities'/(identifier+'.json')
     if path.is_symlink():raise runner.SandboxError('模板路径异常。')
@@ -14,7 +17,9 @@ def load(identifier):
     value['digest']=hashlib.sha256(raw).hexdigest();return value
 
 @router.get('')
-def catalog():return [{k:v for k,v in load(i).items() if k!='files'} for i in IDS]
+def catalog():
+    ids=[*IDS,*['custom-'+v['id'] for v in c.records('workbench','template')]]
+    return [{k:v for k,v in load(i).items() if k not in {'files','rules'}} for i in ids]
 
 class DraftInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -25,9 +30,9 @@ class DraftInput(BaseModel):
 @router.post('/{identifier}/draft')
 def draft(identifier:str,payload:DraftInput):
     template=load(identifier);now=c.now();rid=str(uuid.uuid4())
-    settings=designs.DesignRequest(request='以本地能力模板开始：'+template['spec']['product_name'],**payload.model_dump()).model_dump(mode='json')
+    settings=designs.DesignRequest(application_type=template['spec'].get('application_type','frontend'),request='以本地能力模板开始：'+template['spec']['product_name'],**payload.model_dump()).model_dump(mode='json')
     value={**settings,'design_id':rid,'revision':1,'status':'ready','spec':template['spec'],'template_id':identifier,'template_digest':template['digest'],
-           'reference_snapshot':[],'knowledge_context':None,'web_snapshot':[],'project_rules':[],'selected_annotations':[],
+           'reference_snapshot':[],'knowledge_context':None,'web_snapshot':[],'project_rules':template.get('rules',[]),'selected_annotations':[],
            'error':'','created_at':now,'updated_at':now,'history':[{'action':'template','at':now,'revision':1}]}
     conn=designs.connection()
     try:

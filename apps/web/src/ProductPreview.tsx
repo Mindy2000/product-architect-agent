@@ -1,4 +1,5 @@
 import { API_BASE, apiFetch } from './api'
+import VisualSettings from './VisualSettings'
 import PreviewFeedback, { type Selection } from './PreviewFeedback'
 import { useEffect, useState, useRef } from 'react'
 const API = API_BASE
@@ -83,6 +84,10 @@ export default function ProductPreview({
         </>
       ) : (
         <>
+          <VisualSettings
+            busy={busy}
+            apply={(visual) => send('action', { action: 'configure', visual })}
+          />
           <div className="preview-tools">
             <button
               disabled={busy}

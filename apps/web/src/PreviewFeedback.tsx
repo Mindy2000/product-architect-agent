@@ -11,6 +11,12 @@ type Note = {
   comment: string
   image: string
   candidates: string[]
+  status?: string
+  association?: {
+    locations: { path: string; line: number; confidence: string }[]
+    notice: string
+    uncertain: boolean
+  }
   selection: Selection
 }
 type Baseline = { id: string; label: string; run_id: string; image: string; route: string }
@@ -85,6 +91,13 @@ export default function PreviewFeedback({
       setBusy(false)
     }
   }
+  useEffect(() => {
+    const update = () => {
+      void refresh().catch((e) => setError(e.message))
+    }
+    window.addEventListener('collaboration-changed', update)
+    return () => window.removeEventListener('collaboration-changed', update)
+  }, [base])
   const img = (rid: string, name: string) =>
     API_BASE + '/collaboration/projects/' + rid + '/images/' + name
   return (
@@ -115,7 +128,7 @@ export default function PreviewFeedback({
             <input
               type="checkbox"
               checked={selectedNotes.includes(n.id)}
-              disabled={busy}
+              disabled={busy || n.status === 'closed'}
               onChange={(e) =>
                 setSelectedNotes(
                   e.target.checked
@@ -126,6 +139,17 @@ export default function PreviewFeedback({
             />
             {n.comment}
           </label>
+          {n.association && (
+            <details>
+              <summary>源码关联 · {n.association.uncertain ? '待核对候选' : '显式标记'}</summary>
+              {n.association.locations.map((v, i) => (
+                <p key={i}>
+                  {v.path}:{v.line} · {v.confidence}
+                </p>
+              ))}
+              <small>{n.association.notice}</small>
+            </details>
+          )}
           <small>候选文件：{n.candidates.join('、') || '需读取源码定位'}</small> ·{' '}
           <a href={img(runId, n.image)} target="_blank" rel="noreferrer">
             查看截图
