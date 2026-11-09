@@ -155,19 +155,23 @@ export default function DeliveryCenter({ runId }: { runId: string }) {
               构建：
               {item.build_status === 'passed'
                 ? '通过'
-                : item.build_status === 'failed'
-                  ? '失败'
-                  : '无记录'}
+                : item.build_status === 'unverified'
+                  ? '待重新核对'
+                  : item.build_status === 'failed'
+                    ? '失败'
+                    : '无记录'}
             </span>
             <span>
               浏览器测试：
               {item.test_status === 'passed'
                 ? '通过'
-                : item.test_status === 'failed'
-                  ? '失败'
-                  : item.test_status === 'skipped'
-                    ? '已跳过'
-                    : '无记录'}
+                : item.test_status === 'unverified'
+                  ? '待重新核对'
+                  : item.test_status === 'failed'
+                    ? '失败'
+                    : item.test_status === 'skipped'
+                      ? '已跳过'
+                      : '无记录'}
             </span>
             {item.operator_assisted && <span>Codex 辅助完成</span>}
           </div>

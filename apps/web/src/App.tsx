@@ -760,17 +760,21 @@ export default function App() {
                               构建：
                               {run.build_status === 'passed'
                                 ? '通过'
-                                : run.build_status === 'failed'
-                                  ? '失败'
-                                  : '等待中'}
+                                : run.build_status === 'unverified'
+                                  ? '待重新核对'
+                                  : run.build_status === 'failed'
+                                    ? '失败'
+                                    : '等待中'}
                               　·　Playwright：
                               {run.test_status === 'passed'
                                 ? '通过'
-                                : run.test_status === 'failed'
-                                  ? '失败'
-                                  : run.test_status === 'skipped'
-                                    ? '已跳过'
-                                    : '等待中'}
+                                : run.test_status === 'unverified'
+                                  ? '待重新核对'
+                                  : run.test_status === 'failed'
+                                    ? '失败'
+                                    : run.test_status === 'skipped'
+                                      ? '已跳过'
+                                      : '等待中'}
                             </div>
                           </>
                         )}

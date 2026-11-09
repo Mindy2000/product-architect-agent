@@ -9,6 +9,8 @@ export const agentNames: Record<string, string> = {
 }
 const reviewNames: Record<string, string> = {
   in_progress: '审查中',
+  stopped: '已停止，保留已有结果',
+  not_started: '尚未开始',
   ready_for_manual: '已提交，待人工验收',
   changes_requested: '需要修复',
   blocked: '无法继续',
@@ -39,6 +41,34 @@ export default function TeamPanel({ run }: { run: RunRecord }) {
         按任务顺序协作，共用模型与费用上限。当前{running ? '执行' : '停留'}：
         {agentNames[run.active_agent ?? 'coordinator']}
       </p>
+      {run.review_reserve && (
+        <p className="team-note">
+          开发阶段在原总限额内为审查预留 {run.review_reserve.steps} 步及 ¥
+          {run.review_reserve.estimated_cny.toFixed(2)}{' '}
+          估算额度；不足时提前交接，实际可调用次数取决于上下文用量。
+        </p>
+      )}
+      {!!run.plan_coverage?.length && (
+        <details>
+          <summary>需求责任分配 · {run.plan_coverage.length} 条</summary>
+          <ol>
+            {run.plan_coverage.map((item) => (
+              <li key={item.index}>
+                <b>{run.acceptance_criteria[item.index]}</b>
+                <p>
+                  {item.owner === 'development'
+                    ? `开发任务：${item.tasks?.join('、')}`
+                    : item.owner === 'fixed_check'
+                      ? `固定检查：${item.check === 'build' ? '构建' : '页面基础检查'}`
+                      : '人工核对'}
+                  {item.reason ? ` · ${item.reason}` : ''}
+                </p>
+              </li>
+            ))}
+          </ol>
+          <small>责任分配不表示验收通过。</small>
+        </details>
+      )}
       <div className="team-roles">
         {roles.map((role) => (
           <article
@@ -70,6 +100,33 @@ export default function TeamPanel({ run }: { run: RunRecord }) {
                 <span>{criterionNames[item.status]}</span>
                 <p>{item.evidence}</p>
                 {!!item.files.length && <small>{item.files.join('、')}</small>}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+      {!!run.review_issues?.length && (
+        <details>
+          <summary>修复问题与复查记录 · {run.review_issues.length}</summary>
+          <ol>
+            {run.review_issues.map((issue) => (
+              <li key={issue.id}>
+                <strong>
+                  {issue.id} · {issue.status === 'resolved' ? '已复查解决' : '尚未解决'}
+                </strong>
+                <p>{run.acceptance_criteria[issue.index]}</p>
+                {issue.events.map((event) => (
+                  <div className="team-review" key={event.round}>
+                    <p>
+                      第 {event.round + 1} 次审查 ·{' '}
+                      {event.status === 'resolved' ? '已解决' : '未解决'}：{event.evidence}
+                    </p>
+                    <small>
+                      审查引用：{event.files.join('、') || '无文件引用'}；本轮实际改动：
+                      {event.changed_paths?.join('、') || '无记录'}
+                    </small>
+                  </div>
+                ))}
               </li>
             ))}
           </ol>

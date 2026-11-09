@@ -23,6 +23,12 @@ def diagnosis_prompt(application_type: str) -> str:
 
 
 class RunState(TypedDict, total=False):
+    team_policy_version: int
+    plan_coverage: list[dict]
+    review_issues: list[dict]
+    review_history: list[dict]
+    review_stop_reason: str
+    review_reserve_reached: bool
     orchestration_version: int
     active_agent: str
     specialist_turn: int
@@ -156,8 +162,8 @@ def build_graph(checkpoint_path: Path | None = None):
         stage='planning' if role=='planner' else 'review'
         try:
             value=team.step(state,role,generate_json)
-        except team.TeamLimitExceeded as error:
-            return _commit(state,{'stage':stage,'specialist_action':'stop','validation_ok':False,'last_error':str(error),'team_steps':team.count(state['run_id']),
+        except (team.TeamLimitExceeded,team.ReviewReserveReached,team.EnvironmentUnavailable) as error:
+            return _commit(state,{'review_status':'stopped' if role=='reviewer' else 'not_started','stage':stage,'specialist_action':'stop','validation_ok':False,'last_error':str(error),'team_steps':team.count(state['run_id']),
                 'trace':state.get('trace',[])+[_event(state,stage,'stopped',str(error),agent_id=role)]})
         except (SandboxError,ModelOutputInvalid) as error:
             turn=state.get('specialist_turn',0)+1
@@ -175,12 +181,19 @@ def build_graph(checkpoint_path: Path | None = None):
                 data=receipt.get('data',{})
                 updates.update({prefix+'_status':'passed' if receipt.get('ok') and data.get('passed') else 'failed',
                                 prefix+'_output':data.get('output') or receipt.get('error',{}).get('message','检查未完成')})
-        if decision['action']=='stop':updates.update(validation_ok=False,last_error=decision['summary'])
+        if decision['action']=='stop':updates.update(validation_ok=False,last_error=decision['summary'],review_status='stopped' if role=='reviewer' else 'not_started')
         elif decision['action']=='submit' and role=='planner':
             steps=decision['plan']['steps'];updates.update(plan=[x['title'] for x in steps],plan_details=steps)
+            if team.team_policy.enabled(state):
+                updates['plan_coverage']=team.team_policy.coverage(state,PlanResult.model_validate(decision['plan']),decision.get('coverage_exceptions',[]))
         elif decision['action']=='submit':
-            report=decision['review'];updates.update(review_report=report,review_basis=value['basis'],review_status=report['verdict'],
+            report=decision['review']
+            if team.team_policy.enabled(state):
+                updates.update(team.team_policy.reconcile(state,report,value['basis'],value.get('technical',{})))
+            updates.update(review_report=report,review_basis=value['basis'],review_status=report['verdict'],
                 validation_ok=report['verdict']=='ready_for_manual',last_error='' if report['verdict']=='ready_for_manual' else report['summary'])
+        if updates.get('review_stop_reason'):
+            updates.update(review_status='stopped',validation_ok=False,last_error=updates['review_stop_reason'])
         updates['trace']=state.get('trace',[])+[event]
         return _commit(state,updates)
 
@@ -190,11 +203,16 @@ def build_graph(checkpoint_path: Path | None = None):
         if state.get('specialist_action')=='submit':return 'project_setup'
         return 'delivery' if state.get('specialist_action')=='stop' else 'planner_agent'
     def review_prepare(state):
-        from . import team
-        return _commit(state,{'stage':'review','active_agent':'reviewer','specialist_turn':0,'specialist_feedback':'',
+        from . import team, acceptance
+        if team.team_policy.enabled(state) and team.team_policy.no_change(state,team.basis(state),acceptance.matrix(state['run_id'],state)['technical']):
+            reason='修复后源码、运行环境与技术证据没有变化，停止重复审查，保留未解决问题。'
+            return _commit(state,{'specialist_action':'stop','review_status':'stopped','review_stop_reason':reason,'last_error':reason,'validation_ok':False,
+                'trace':state.get('trace',[])+[_event(state,'review','stopped',reason)]})
+        return _commit(state,{'specialist_action':'tool','stage':'review','active_agent':'reviewer','specialist_turn':0,'specialist_feedback':'',
             'review_status':'in_progress','validation_ok':False,'agent_handoffs':team.handoff(state,'developer','reviewer','独立核对当前源码、逐条要求与技术证据，不代写人工验收。')})
     def after_reviewer(state):
         if state.get('specialist_action')=='tool':return 'reviewer_agent'
+        if state.get('review_reserve_reached') or state.get('review_stop_reason'):return 'delivery'
         if state.get('specialist_action')=='stop' or state.get('review_status')!='changes_requested':return 'delivery'
         return 'repair' if state.get('repair_round',0)<state.get('repair_limit',3) else 'delivery'
 
@@ -280,7 +298,7 @@ def build_graph(checkpoint_path: Path | None = None):
         return _commit(state,updates)
 
     def after_executor(state):
-        if state.get('executor_stopped'):return 'delivery'
+        if state.get('executor_stopped'):return 'build' if state.get('review_reserve_reached') else 'delivery'
         if state.get('executor_done'):return 'build'
         return 'executor_decide'
 
@@ -430,6 +448,8 @@ def build_graph(checkpoint_path: Path | None = None):
             technical=acceptance.matrix(state['run_id'],state)['technical']
             if state.get('review_status')!='ready_for_manual' or state.get('review_basis')!=team.basis(state) or not all(technical.get(k) for k in ('build_passed','test_passed','health_passed','environment_verified')):
                 state={**state,**_commit(state,{'validation_ok':False,'review_status':'stale','last_error':'审查证据已过期或技术检查未通过，未标记交付通过。'})}
+        if state.get('orchestration_version')==1 and state.get('review_status') in (None,'in_progress'):
+            state={**state,'review_status':'stopped' if state.get('review_status') else 'not_started'}
         final_status = "completed" if state.get("validation_ok") else "failed_validation"
         preparing = _event(state, "delivery", "running", "正在生成源码 ZIP、Git diff、Trace 与交付报告")
         _commit(state, {"stage": "delivery", "status": "running", "trace": state.get("trace", []) + [preparing]})
@@ -437,18 +457,32 @@ def build_graph(checkpoint_path: Path | None = None):
         pending_trace = _merge_persisted_trace(state["run_id"], base_trace, base_trace + [preparing])
         if state.get("validation_ok"):
             from .runner import capture_preview
-            preview_result = capture_preview(state["run_id"])
+            try:preview_result = capture_preview(state["run_id"])
+            except SandboxError as error:
+                if state.get('orchestration_version')!=1:raise
+                from types import SimpleNamespace
+                preview_result=SimpleNamespace(exit_code=1,output=str(error))
+                state={**state,'validation_ok':False,'review_status':'stale','last_error':'交付预览时运行环境不可用，保留源码与失败报告。'}
+                final_status='failed_validation'
             pending_trace.append(_event(state,"preview","passed" if preview_result.exit_code == 0 else "failed","隔离浏览器页面预览已捕获" if preview_result.exit_code == 0 else "页面预览捕获失败", output=preview_result.output[-2000:]))
         if state.get('orchestration_version')==1:
             from . import team
             state={**state,'active_agent':'coordinator','team_steps':team.count(state['run_id']),
                    'agent_handoffs':team.handoff(state,state.get('active_agent','coordinator'),'coordinator','执行结束，保留审查结论与未确认事项。')}
+            final_basis=state['agent_handoffs'][-1]['basis']
+            if state.get('validation_ok') and final_basis!=state.get('review_basis'):
+                state={**state,'validation_ok':False,'review_status':'stale','last_error':'交付前证据已变化，保留已有源码与未通过报告。'}
+                final_status='failed_validation'
+            if 'environment' in final_basis and final_basis['environment'] is None:
+                state={**state,'validation_ok':False,'build_status':'unverified','test_status':'unverified'}
+                final_status='failed_validation'
         paths = deliver(state["run_id"], {**state, "status": final_status, "trace": pending_trace})
         event = _event(state, "delivery", "completed", "交付文件已生成", artifacts=paths)
         final_trace = _merge_persisted_trace(state["run_id"], base_trace, pending_trace + [event])
-        trace_path = Path(__file__).resolve().parents[3] / paths["trace"]
+        from .runner import ROOT as output_root
+        trace_path = output_root / paths["trace"]
         trace_path.write_text(json.dumps(final_trace, ensure_ascii=False, indent=2), encoding="utf-8")
-        return _commit(state, {**({key:state.get(key) for key in ('active_agent','team_steps','agent_handoffs','validation_ok','review_status','last_error')} if state.get('orchestration_version')==1 else {}),"stage": "delivery", "status": final_status, "artifact_paths": paths, "trace": final_trace})
+        return _commit(state, {**({key:state.get(key) for key in ('active_agent','team_steps','agent_handoffs','validation_ok','review_status','last_error','build_status','test_status')} if state.get('orchestration_version')==1 else {}),"stage": "delivery", "status": final_status, "artifact_paths": paths, "trace": final_trace})
 
     def after_test(state: RunState) -> str:
         if state.get("validation_ok"):
@@ -465,7 +499,12 @@ def build_graph(checkpoint_path: Path | None = None):
                 from langgraph.types import interrupt
                 _commit(state, {"status":"paused", "can_resume":True})
                 interrupt({"reason":"用户请求暂停，当前阶段已完成"})
-            result=node(state)
+            try:result=node(state)
+            except SandboxError as error:
+                if state.get('orchestration_version')!=1 or node.__name__ not in {'build','browser_test'}:raise
+                prefix='build' if node.__name__=='build' else 'test'
+                result=_commit(state,{prefix+'_status':'failed',prefix+'_output':str(error),'validation_ok':False,'last_error':str(error),
+                    'trace':state.get('trace',[])+[_event(state,node.__name__,'failed',str(error))]})
             if cancellation(state["run_id"]):raise CancellationRequested()
             return result
         return invoke
@@ -491,7 +530,7 @@ def build_graph(checkpoint_path: Path | None = None):
     graph.add_conditional_edges("requirements",lambda state:"sandbox" if state.get("orchestration_version")==1 else "planning",{"sandbox":"sandbox","planning":"planning"})
     graph.add_edge("team_prepare","planner_agent")
     graph.add_conditional_edges("planner_agent",after_planner,{"planner_agent":"planner_agent","project_setup":"project_setup","delivery":"delivery"})
-    graph.add_edge("review_prepare","reviewer_agent")
+    graph.add_conditional_edges("review_prepare",lambda state:"delivery" if state.get("specialist_action")=="stop" else "reviewer_agent",{"delivery":"delivery","reviewer_agent":"reviewer_agent"})
     graph.add_conditional_edges("reviewer_agent",after_reviewer,{"reviewer_agent":"reviewer_agent","repair":"repair","delivery":"delivery"})
     graph.add_edge("planning", "sandbox")
     graph.add_conditional_edges("sandbox",lambda state: "team_prepare" if state.get("orchestration_version")==1 else "project_setup" if state.get("runtime_version",1)>=2 else "generation",{"team_prepare":"team_prepare","project_setup":"project_setup","generation":"generation"})

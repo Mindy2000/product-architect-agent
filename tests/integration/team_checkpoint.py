@@ -28,10 +28,10 @@ def provider(run_id,stage,*args,**kwargs):
     calls.append(stage)
     if stage.startswith('agent-reviewer-'):
         turn=int(stage.rsplit('-',1)[1]);ctx=json.loads(args[1])
-        if turn==1:return team.SpecialistDecision(action='tool',summary='读取实现进行独立审查',tool='project.read_file',arguments={'path':'src/App.tsx'}),{}
-        return team.SpecialistDecision(action='submit',summary='逐条审查完成',review=team.ReviewReport(verdict='ready_for_manual',summary='技术证据与源码已读取，人工验收另行记录',criteria=[team.CriterionReview(index=i,status='manual',evidence='合成审查完成，仍由用户确认实际体验') for i in range(len(ctx['acceptance_criteria']))])),{}
+        if turn==1:return team.CloseoutDecision(action='tool',summary='读取实现进行独立审查',tool='project.read_file',arguments={'path':'src/App.tsx'}),{}
+        return team.CloseoutDecision(action='submit',summary='逐条审查完成',review=team.ReviewReport(verdict='ready_for_manual',summary='技术证据与源码已读取，人工验收另行记录',criteria=[team.CriterionReview(index=i,status='manual',evidence='合成审查完成，仍由用户确认实际体验') for i in range(len(ctx['acceptance_criteria']))])),{}
     if stage.startswith('agent-planner-'):
-        return team.SpecialistDecision(action='submit',summary='规划开发任务',plan=model.PlanResult.model_validate({'steps':[{'title':'实现状态与测试','description':'写入计数器及浏览器检查','depends_on':[],'acceptance_indices':[0,1,2]},{'title':'检查源码清单','description':'查看受控文件','depends_on':[1],'acceptance_indices':[]},{'title':'保存源码版本','description':'固定Git快照','depends_on':[2],'acceptance_indices':[3]}]})),{}
+        return team.CloseoutDecision(action='submit',summary='规划开发任务',plan=model.PlanResult.model_validate({'steps':[{'title':'实现状态与测试','description':'写入计数器及浏览器检查','depends_on':[],'acceptance_indices':list(range(6))},{'title':'检查源码清单','description':'查看受控文件','depends_on':[1],'acceptance_indices':[]},{'title':'保存源码版本','description':'固定Git快照','depends_on':[2],'acceptance_indices':[3]}]})),{}
     if stage=='diagnosis':return model.RepairDecision(action='stop',reason='离线夹具不自动掩盖新失败，保留真实诊断'),{}
     turn=int(stage.split('-')[-1]);action='tool';task=None;tool=None;arguments={}
     if turn==1:
@@ -54,7 +54,7 @@ with ExitStack() as stack:
             pause_once[0]=True;store.set_pause_requested(identifier,True)
         return receipt
     stack.enter_context(patch.object(tools,'execute',side_effect=traced))
-    initial={'run_id':identifier,'runtime_version':3,'orchestration_version':1,'requirements_confirmed':True,'product_spec':spec,'acceptance_criteria':spec['acceptance_criteria'],'user_request':'M19 合成执行器任务','trace':[],'repair_round':0,'run_budget_cny':0,'model_call_limit':0,'execution_step_limit':24,'status':'queued'}
+    initial={'run_id':identifier,'runtime_version':3,'orchestration_version':1,'team_policy_version':1,'requirements_confirmed':True,'product_spec':spec,'acceptance_criteria':spec['acceptance_criteria'],'user_request':'M19 合成执行器任务','trace':[],'repair_round':0,'run_budget_cny':0,'model_call_limit':0,'execution_step_limit':24,'status':'queued'}
     store.create_run(identifier,initial['user_request'],initial,'2026-11-03')
     checkpoint=lab/'data/checkpoints.sqlite3';config={'configurable':{'thread_id':identifier},'recursion_limit':256}
     workflow=graph.build_graph(checkpoint)
@@ -84,5 +84,5 @@ with ExitStack() as stack:
     assert len(calls)==len(set(calls)) and len(calls)==10,calls
     assert project.manifest(identifier)['digest']==first_digest,'resume unexpectedly rewrote sources'
     for key in ['source_zip','trace','git_diff','manifest','report']:assert (lab/result['artifact_paths'][key]).is_file(),key
-    report={'passed':True,'provider':'deterministic_fake_no_network','paid_calls':0,'lab_root':str(lab),'run_id':identifier,'orchestration_version':1,'reviewer_crash_replayed_without_provider_or_tool_repeat':True,'shared_steps':result['team_steps'],'handoffs':len(result['agent_handoffs']),'pause_after_first_edit':True,'recreated_checkpoint_resume':True,'duplicate_provider_decisions':False,'scripted_calls':calls,'status':result['status'],'build_status':result['build_status'],'test_status':result['test_status'],'executor_turns':result['executor_turns'],'repair_round':result['repair_round'],'source_digest_unchanged_after_resume':True,'artifacts':result['artifact_paths']}
+    report={'passed':True,'provider':'deterministic_fake_no_network','paid_calls':0,'lab_root':str(lab),'run_id':identifier,'orchestration_version':1,'team_policy_version':1,'reviewer_crash_replayed_without_provider_or_tool_repeat':True,'shared_steps':result['team_steps'],'handoffs':len(result['agent_handoffs']),'pause_after_first_edit':True,'recreated_checkpoint_resume':True,'duplicate_provider_decisions':False,'scripted_calls':calls,'status':result['status'],'build_status':result['build_status'],'test_status':result['test_status'],'executor_turns':result['executor_turns'],'repair_round':result['repair_round'],'source_digest_unchanged_after_resume':True,'artifacts':result['artifact_paths']}
     (ROOT/'outputs/offline-team.json').write_text(json.dumps(report,ensure_ascii=False,indent=2));print(json.dumps(report,ensure_ascii=False))

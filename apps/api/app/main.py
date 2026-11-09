@@ -20,7 +20,7 @@ from .runner import SandboxError, worker_image_available
 from . import store, workbench, regression, acceptance
 from . import designs, references, knowledge, library, history, maintenance, operations, dify, dependencies, source_import, model_capabilities, vision, fullstack, application_storage, research
 
-app = FastAPI(title="Product Architect Agent", version="0.4.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Product Architect Agent", version="0.4.1", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(workbench.router)
 app.include_router(acceptance.router)
 app.include_router(regression.router)
@@ -102,7 +102,18 @@ def _record_failure(run_id: str, exc: Exception) -> None:
     if current.get("repair_round", 0) >= 3 and "repair" in pending_nodes:
         can_resume = False
     trace = current.get("trace", []) + [{"stage": current.get("stage", "workflow"), "status": status, "at": datetime.now(timezone.utc).isoformat(), "summary": summary}]
-    store.update_run(run_id, {**current, "status": status, "can_resume": can_resume, "last_error": summary, "trace": trace})
+    failure={**current, "status": status, "can_resume": can_resume, "last_error": summary, "trace": trace}
+    if current.get('orchestration_version')==1:
+        failure['review_status']='stopped' if current.get('review_status')=='in_progress' else current.get('review_status','not_started')
+        failure['validation_ok']=False
+        if isinstance(exc,SandboxError):failure.update(build_status='unverified',test_status='unverified')
+        from . import runner
+        try:
+            if runner.workspace_for(run_id).is_dir():failure['artifact_paths']=runner.deliver(run_id,failure)
+        except Exception:
+            # Do not bypass source/path checks if export itself is unsafe or unavailable.
+            failure['export_error']='已有源码暂无法安全导出，原文件保留，请查看本机诊断。'
+    store.update_run(run_id, failure)
 
 
 def _run_in_background(run_id: str, initial_state: dict | None = None) -> None:
@@ -192,6 +203,7 @@ def capabilities():
         "knowledge_library": {"enabled":True,"retrieval":"local_full_text","semantic_search":False,"ocr":library.document_capabilities()},
         "runtime_version": 3,
         "orchestration_version": 1,
+        "team_policy_version": 1,
         "tool_protocol_version": 1,
         "file_policy": {"max_files":128,"max_file_bytes":65536,"max_total_bytes":2097152,"editable_roots":["src","tests"]},
         "execution_defaults": {"step_limit":40,"run_budget_cny":5,"model_call_limit":80},
@@ -219,6 +231,7 @@ def create_run(payload: RunRequest, background_tasks: BackgroundTasks):
         "run_id": run_id,
         "runtime_version": 3,
         "orchestration_version": 1,
+        "team_policy_version": 1,
         "design_id": run_id,
         "design_revision": proposal['revision'],
         "requirements_confirmed": True,
@@ -270,7 +283,9 @@ def public_run(state: dict) -> dict:
     if result.get('pending_executor'):
         pending = result['pending_executor']
         result['pending_executor']={'turn':pending.get('turn'),'decision':{key:value for key,value in pending.get('decision',{}).items() if key != 'arguments'}}
-    if result.get('orchestration_version')==1 and result.get('review_report'):
+    from . import team_policy
+    if team_policy.enabled(state):result['review_reserve']=team_policy.reserve(state)
+    if result.get('orchestration_version')==1 and result.get('review_report') and result.get('review_status') not in {'stopped','not_started'}:
         from . import team
         try:current=team.basis(state)==state.get('review_basis')
         except (SandboxError,OSError):current=False

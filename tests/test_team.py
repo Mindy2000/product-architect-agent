@@ -101,14 +101,14 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(team.count(state['run_id']),2)
     def test_source_change_during_review_rejects_saved_decision(self):
         state={**self.state,'specialist_turn':0}
-        with patch.object(team,'context',return_value={'basis':{'digest':'before'}}),patch.object(team,'basis',return_value={'digest':'after'}):
+        with patch.object(team,'context',return_value={'basis':{'digest':'before','environment':{'id':'fixture'}}}),patch.object(team,'basis',return_value={'digest':'after','environment':{'id':'fixture'}}):
             with self.assertRaisesRegex(runner.SandboxError,'已变化'):team.step(state,'reviewer',self.provider)
         self.provider.assert_called_once()
     def test_resume_cannot_reuse_review_after_source_changed(self):
-        ctx={'basis':{'digest':'before'}}
+        ctx={'basis':{'digest':'before','environment':{'id':'fixture'}}}
         team.invoke(self.state,'reviewer','agent-reviewer-0-1','system',json.dumps(ctx),team.SpecialistDecision,100,self.provider)
         self.provider.reset_mock()
-        with patch.object(team,'context',return_value={'basis':{'digest':'after'}}):
+        with patch.object(team,'context',return_value={'basis':{'digest':'after','environment':{'id':'fixture'}}}):
             with self.assertRaisesRegex(runner.SandboxError,'过期'):team.step(self.state,'reviewer',self.provider)
         self.provider.assert_not_called()
     def test_compatibility_keeps_old_runs_single_executor(self):

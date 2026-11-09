@@ -11,6 +11,30 @@ export type TraceEvent = {
   at?: string
 }
 export type RunRecord = {
+  team_policy_version?: number
+  review_reserve?: { steps: number; estimated_cny: number }
+  plan_coverage?: {
+    index: number
+    owner: string
+    tasks?: string[]
+    reason?: string
+    check?: string
+  }[]
+  review_issues?: {
+    id: string
+    index: number
+    status: string
+    evidence: string
+    files: string[]
+    events: {
+      round: number
+      status: string
+      evidence: string
+      files: string[]
+      changed_paths?: string[]
+    }[]
+  }[]
+  review_stop_reason?: string
   orchestration_version?: number
   active_agent?: string
   team_steps?: number

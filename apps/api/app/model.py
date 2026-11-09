@@ -235,6 +235,13 @@ def _reserve(run_id: str, stage: str, provider: str, model: str, budget: float, 
         if int(spent[1]) >= int(run.get('model_call_limit',80)):
             raise BudgetExceeded('该任务已达到模型调用次数上限，已停止新增调用。')
         remaining=max(0,float(run.get('run_budget_cny',5))-float(spent[0]))
+        from . import team_policy
+        if team_policy.protect_stage(run,stage):
+            if int(spent[1])+1>int(run.get('model_call_limit',80))-team_policy.reserve(run)['steps']:
+                raise team_policy.ReviewReserveReached('剩余模型调用次数已预留给审查，未发送开发请求。')
+            protected=team_policy.reserve(run)['estimated_cny']
+            if remaining-reserve_cny<protected or budget-float(row['spent'])-reserve_cny<protected:
+                raise team_policy.ReviewReserveReached(f'本次调用将占用预留审查额度¥{protected:.2f}，已停止继续开发；总预算不变。')
         if reserve_cny>remaining:
             raise BudgetExceeded(f'本任务剩余估算额度¥{remaining:.4f}，不足以覆盖本次调用预留¥{reserve_cny:.4f}；已保留当前结果并停止新调用。')
         connection.execute("INSERT INTO model_usage VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'reserved', ?)", (call_id, run_id, stage, provider, model, reserve_cny, datetime.now(timezone.utc).isoformat()))

@@ -27,7 +27,9 @@ first_edit=[False]
 def fake(run_id,stage,*a,**kw):
  report['scripted_stages'].append(stage)
  if stage.startswith('design-'):return SPEC,{}
- if stage.startswith('agent-planner-'):return team.SpecialistDecision(action='submit',summary='规划冻结任务',plan=plan()),{}
+ if stage.startswith('agent-planner-'):
+  value=plan();value.steps[0].acceptance_indices=list(range(len(json.loads(a[1])['acceptance_criteria'])))
+  return team.CloseoutDecision(action='submit',summary='规划冻结任务',plan=value),{}
  if stage.startswith('agent-reviewer-'):
   turn=int(stage.rsplit('-',1)[1]);ctx=json.loads(a[1])
   if turn<=2:return team.SpecialistDecision(action='tool',summary='独立阅读实现与测试',tool='project.read_file',arguments={'path':'src/App.tsx' if turn==1 else 'tests/e2e.spec.ts'}),{}
@@ -107,10 +109,17 @@ try:
    assert state['repair_round']==1 and state['build_status']==state['test_status']=='passed'
    assert any(e['stage']=='build' and e['status']=='failed' for e in state['trace'])
    assert state['orchestration_version']==1 and state['review_status']=='ready_for_manual'
+   assert len(state['plan_coverage'])==len(state['acceptance_criteria'])
+   assert state['review_issues'] and all(x['status']=='resolved' for x in state['review_issues'])
+   assert len(state['review_history'])==2
    assert state['team_steps']==len([x for x in report['scripted_stages'] if not x.startswith('design-')]),state
    handoffs={(x['from'],x['to']) for x in state['agent_handoffs']}
    assert {('planner','developer'),('developer','reviewer'),('reviewer','developer'),('reviewer','coordinator')}<=handoffs,handoffs
    expect(page.get_by_role('region',name='三智能体协作')).to_be_visible(timeout=15000)
+   team_panel=page.get_by_role('region',name='三智能体协作')
+   team_panel.locator('summary').filter(has_text='修复问题与复查记录').click()
+   expect(team_panel.get_by_text('criterion-1 · 已复查解决',exact=True)).to_be_visible()
+   team_panel.locator('summary').filter(has_text='修复问题与复查记录').click()
    passed('三智能体规划→开发→真实构建失败→独立审查→修复→再次审查→交付，交接和共享步骤可见')
    assert (SOURCE/'generated-projects'/rid/'tests/acceptance.spec.ts').read_bytes()==(SOURCE/'benchmarks/todo-v1.spec.ts').read_bytes()
    passed('发布包内独立验收文件实际被加载执行')

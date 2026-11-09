@@ -403,11 +403,15 @@ def deliver(run_id: str, state: dict[str, Any]) -> dict[str, str]:
     report.extend(f"- {event.get('summary', '')}" for event in state.get("trace", []) if event.get("stage") == "repair")
     team_export=None
     if state.get('orchestration_version')==1:
-        team_export={key:state.get(key) for key in ('orchestration_version','agent_handoffs','review_report','review_basis','review_status','team_steps','execution_step_limit')}
+        team_export={key:state.get(key) for key in ('orchestration_version','team_policy_version','plan_coverage','review_issues','review_history','review_stop_reason','agent_handoffs','review_report','review_basis','review_status','team_steps','execution_step_limit')}
         team_export['notice']='智能体审查是辅助证据，不代替用户逐条验收。三个角色共享同一任务预算。'
         report.extend(['','## 三智能体协作','',team_export['notice'],f"审查状态：{state.get('review_status','未完成')}"])
         report.extend(f"- {item['from']} → {item['to']}：{item['summary']}" for item in state.get('agent_handoffs',[]))
         report.extend(f"- 标准 {item['index']+1} [{item['status']}] {item['evidence']}" for item in (state.get('review_report') or {}).get('criteria',[]))
+    if state.get('last_error'):report.extend(['','## 停止或未完成原因','',state['last_error']])
+    if state.get('review_issues'):
+        report.extend(['','## 问题复查记录',''])
+        report.extend(f"- {issue['id']} [{issue['status']}] {issue['evidence']}；审查引用位置：{', '.join(issue.get('files',[]))}" for issue in state['review_issues'])
     report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
     archive_path = OUTPUT_ROOT / f"{run_id}-source.zip"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
