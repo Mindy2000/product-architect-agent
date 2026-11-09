@@ -55,6 +55,9 @@ export default function PreviewFeedback({
       base + '/evidence',
     )
     setNotes(d.notes)
+    setSelectedNotes((ids) =>
+      ids.filter((id) => d.notes.some((note) => note.id === id && note.status !== 'closed')),
+    )
     setBaselines(d.baselines)
     setComparisons(d.comparisons)
   }

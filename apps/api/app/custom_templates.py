@@ -7,10 +7,16 @@ from .security_policy import redact
 router=APIRouter(prefix='/api/v1/custom-templates')
 
 def clean(value):
-    text=json.dumps(value,ensure_ascii=False)
-    if redact(text)!=text:return False
-    # Deliberately conservative; user can edit a selected source before saving.
-    return not re.search(r'(?i)(?:api[_-]?key|password|secret|access[_-]?token)\s*["\x27]?\s*[:=]\s*["\x27][^"\x27]{4,}|-----BEGIN .*PRIVATE KEY|/Users/|[A-Z]:\\\\Users\\\\|[\w.+-]+@[\w.-]+\.[a-z]{2,}',text)
+    if isinstance(value,dict):
+        for key,item in value.items():
+            if re.fullmatch(r'(?i)(api[_-]?key|password|secret|access[_-]?token)',str(key)) and isinstance(item,str) and len(item)>=4:return False
+            if not clean(str(key)) or not clean(item):return False
+        return True
+    if isinstance(value,list):return all(clean(item) for item in value)
+    if not isinstance(value,str):return True
+    if redact(value)!=value:return False
+    # Inspect actual strings, before JSON escaping can hide quotes in source code.
+    return not re.search(r"(?i)(?:api[_-]?key|password|secret|access[_-]?token)\s*[\"']?\s*[:=]\s*[\"'][^\"']{4,}|-----BEGIN .*PRIVATE KEY|/Users/|[A-Z]:\\+Users\\+|[\w.+-]+@[\w.-]+\.[a-z]{2,}",value)
 
 @router.get('/projects/{rid}/candidate')
 def candidate(rid:uuid.UUID):
@@ -24,7 +30,7 @@ def candidate(rid:uuid.UUID):
         if not project.managed_path(path):continue
         values.append({'path':path,'content':redact(text) if clean(text) else '', 'blocked':not clean(text),'bytes':len(text.encode())})
     return {'source_digest':project.source_digest(files),'files':values,'spec':spec if clean(spec) else None,
-            'rules':[x for x in c.freeze_rules(str(rid)) if clean(x)],
+            'rules':[x for x in c.records(c.lineage(rid),'rule') if x['active'] and c.applicable(x,{}) and clean(x)],
             'notice':'仅所选受控源码、测试和手选通用规则。不会包含数据库、附件、浏览器数据、配置或密钥。自动检测无法识别所有业务隐私，请逐项检查和编辑。'}
 
 class TemplateInput(BaseModel):

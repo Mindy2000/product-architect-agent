@@ -87,6 +87,11 @@ class EvolutionTests(unittest.TestCase):
   payload.previous_id=uuid.UUID(saved['id']);v2=custom.prepare(payload);second=custom.save(custom.SaveTemplate(**payload.model_dump(),token=v2['digest'],confirmed=True));self.assertEqual(second['version'],2);self.assertEqual(templates.load(identifier)['version'],1)
   self.assertFalse(custom.clean('const key = "sk-'+('x'*20)+'"'))
   with self.assertRaises(HTTPException):custom.prepare(payload) # old version cannot overwrite newer
+ def test_template_inspects_unescaped_literals_and_nested_fields(self):
+  self.assertFalse(custom.clean({'files':{'src/App.tsx':'const password = "private-value"'}}))
+  self.assertFalse(custom.clean({'nested':{'api_key':'unknown-provider-value'}}))
+  self.assertFalse(custom.clean(r'const home = "C:\Users\Someone"'))
+  self.assertTrue(custom.clean({'files':{'src/App.tsx':'const label = "任务标题"'}}))
  def test_template_rejects_hidden_files_and_stale_sources(self):
   payload=self.template_payload();payload.files['.env']='secret'
   with self.assertRaises(HTTPException):custom.prepare(payload)

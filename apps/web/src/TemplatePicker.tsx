@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { apiJson } from './api'
 type Template = {
+  name?: string
+  custom?: boolean
   id: string
   version: number
   spec: { product_name: string; summary: string; acceptance_criteria: string[] }
@@ -50,10 +52,11 @@ export default function TemplatePicker({
       <div className="template-grid">
         {items.map((t) => (
           <article key={t.id}>
-            <h3>{t.spec.product_name}</h3>
+            <h3>{t.name || t.spec.product_name}</h3>
             <p>{t.spec.summary}</p>
             <small>
-              模板 v{t.version} · {t.spec.acceptance_criteria.length} 条验收标准
+              {t.custom ? '自定义模板' : '内置模板'} v{t.version} ·{' '}
+              {t.spec.acceptance_criteria.length} 条验收标准
             </small>
             <button
               disabled={busy || disabled}
