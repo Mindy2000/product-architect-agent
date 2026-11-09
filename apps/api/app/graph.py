@@ -23,6 +23,11 @@ def diagnosis_prompt(application_type: str) -> str:
 
 
 class RunState(TypedDict, total=False):
+    collaboration_version: int
+    project_rules: list[dict]
+    selected_annotations: list[dict]
+    template_id: str
+    template_digest: str
     team_policy_version: int
     plan_coverage: list[dict]
     review_issues: list[dict]
@@ -153,6 +158,8 @@ def build_graph(checkpoint_path: Path | None = None):
     def team_prepare(state: RunState) -> dict:
         from . import team
         initialize_workspace(state['run_id'],state.get('parent_run_id'),application_type=state['product_spec'].get('application_type','frontend'),crud_schema=state['product_spec'].get('crud_schema'))
+        from .capability_templates import seed
+        seed(state)
         return _commit(state,{'stage':'planning','active_agent':'planner','specialist_turn':0,'specialist_feedback':'',
             'agent_handoffs':team.handoff(state,'coordinator','planner','按用户冻结方案规划；不增删验收标准。')})
 
@@ -499,6 +506,14 @@ def build_graph(checkpoint_path: Path | None = None):
                 from langgraph.types import interrupt
                 _commit(state, {"status":"paused", "can_resume":True})
                 interrupt({"reason":"用户请求暂停，当前阶段已完成"})
+            if state.get('collaboration_version')==1:
+                from .collaboration import pending
+                question=pending(state['run_id'])
+                if question:
+                    from langgraph.types import interrupt
+                    _commit(state,{'status':'paused','can_resume':True})
+                    interrupt({'kind':'clarification','question':question})
+                    if pending(state['run_id']):raise SandboxError('请先回答澄清问题。')
             try:result=node(state)
             except SandboxError as error:
                 if state.get('orchestration_version')!=1 or node.__name__ not in {'build','browser_test'}:raise

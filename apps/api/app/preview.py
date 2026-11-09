@@ -14,6 +14,9 @@ class _Preview:
         workspace=workspace_for(run_id)
         if not (workspace/'dist/index.html').is_file():
             raise SandboxError('该项目还没有可预览的构建结果。')
+        from . import project,runtime_identity
+        self.source_digest=project.manifest(run_id)['digest']
+        self.environment=runtime_identity.require(run_id)
         self.lock=threading.Lock()
         self.used=time.monotonic()
         self.name='pa-preview-'+uuid.uuid4().hex[:16]
@@ -34,6 +37,8 @@ class _Preview:
             command[command.index(WORKER_IMAGE)]=fullstack.IMAGE
             index=command.index('--tmpfs')
             command[index:index]=['--mount',f'type=bind,src={directory},dst=/appdata','--env','PA_FULLSTACK=1','--env','PYTHONPYCACHEPREFIX=/tmp/pa-pycache','--env','PYTHONDONTWRITEBYTECODE=1']
+        image_index=command.index(fullstack.IMAGE if fullstack.application_type(run_id)=='fullstack_crud' else WORKER_IMAGE)
+        command[image_index]=self.environment['image_id']
         self._buffer=b''
         self.process=subprocess.Popen(command,env=environment(),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',bufsize=1)
         try:self.frame=self.read(90)

@@ -1,0 +1,60 @@
+{
+  "id": "tasks",
+  "version": 1,
+  "spec": {
+    "product_name": "任务管理",
+    "summary": "添加、完成、删除任务，刷新后保留",
+    "target_users": [
+      "个人用户"
+    ],
+    "pages": [
+      "任务管理"
+    ],
+    "core_features": [
+      "添加非空任务",
+      "完成状态可切换",
+      "删除任务",
+      "刷新后数据保留"
+    ],
+    "assumptions": [
+      "仅本地单用户"
+    ],
+    "non_goals": [
+      "账号与远程服务"
+    ],
+    "acceptance_criteria": [
+      "添加非空任务",
+      "完成状态可切换",
+      "删除任务",
+      "刷新后数据保留"
+    ],
+    "application_type": "frontend",
+    "crud_schema": null,
+    "page_details": [
+      {
+        "name": "任务管理",
+        "route": "/",
+        "purpose": "添加、完成、删除任务，刷新后保留",
+        "sections": [
+          "操作区",
+          "记录区"
+        ],
+        "interactions": [
+          "添加非空任务",
+          "完成状态可切换",
+          "删除任务",
+          "刷新后数据保留"
+        ]
+      }
+    ],
+    "visual_direction": "中文清晰布局，深蓝与浅灰，适配窄屏",
+    "data_notes": [
+      "独立localStorage键，数据仅保存在浏览器"
+    ]
+  },
+  "files": {
+    "src/App.tsx": "import {useState} from 'react'\nexport default function App(){const [items,setItems]=useState<{id:string,title:string,done:boolean}[]>(()=>{try{return JSON.parse(localStorage.getItem('pa-template-tasks')||'[]')}catch{return []}}),[title,setTitle]=useState('');function save(next:typeof items){setItems(next);localStorage.setItem('pa-template-tasks',JSON.stringify(next))}return <main><h1>任务管理</h1><label>任务标题<input value={title} onChange={e=>setTitle(e.target.value)}/></label><button onClick={()=>{if(title.trim()){save([...items,{id:crypto.randomUUID(),title:title.trim(),done:false}]);setTitle('')}}}>添加任务</button><ul>{items.map(x=><li key={x.id}><label><input type=\"checkbox\" checked={x.done} onChange={()=>save(items.map(i=>i.id===x.id?{...i,done:!i.done}:i))}/>{x.title}</label><button onClick={()=>save(items.filter(i=>i.id!==x.id))}>删除</button></li>)}</ul></main>}\n",
+    "src/style.css": ":root{font-family:system-ui;color:#16324f;background:#f1f5f9}body{margin:0}main{max-width:900px;margin:48px auto;padding:32px;background:white;border-radius:20px}h1{font-size:32px}button,input,select{font:inherit;padding:10px;margin:8px;border:1px solid #cbd5e1;border-radius:8px}button{background:#16324f;color:white;cursor:pointer}li{padding:12px;border-bottom:1px solid #e2e8f0}label{display:block}.metrics{display:flex;gap:16px;flex-wrap:wrap}.metric{padding:24px;background:#edf5ff;border-radius:12px}",
+    "tests/e2e.spec.ts": "import {test,expect} from '@playwright/test'\ntest('任务管理模板核心流程',async({page})=>{await page.goto('/');await page.getByLabel('任务标题').fill('模板任务');await page.getByRole('button',{name:'添加任务'}).click();await page.getByRole('checkbox').check();await page.reload();await expect(page.getByRole('checkbox')).toBeChecked();await page.getByRole('button',{name:'删除',exact:true}).click();await expect(page.getByRole('listitem')).toHaveCount(0);})\n"
+  }
+}

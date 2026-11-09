@@ -4,6 +4,8 @@ import { terminalStates } from './runTypes'
 import { useEffect, useState } from 'react'
 import WorkbenchCenter from './WorkbenchCenter'
 import ProductPreview from './ProductPreview'
+import CollaborationPanel from './CollaborationPanel'
+import TemplatePicker from './TemplatePicker'
 import DesignStudio from './DesignStudio'
 import ReferenceLibrary from './ReferenceLibrary'
 import KnowledgeSettings from './KnowledgeSettings'
@@ -111,6 +113,10 @@ export default function App() {
   const [researchEnabled, setResearchEnabled] = useState(false),
     [webSourceIds, setWebSourceIds] = useState<string[]>([])
   const [applicationType, setApplicationType] = useState<'frontend' | 'fullstack_crud'>('frontend')
+  const [annotationSelection, setAnnotationSelection] = useState<{
+    parent: string
+    ids: string[]
+  } | null>(null)
   const [parentRunId, setParentRunId] = useState<string | null>(null)
   const [acceptanceProfile, setAcceptanceProfile] = useState('generated')
   const [runBudget, setRunBudget] = useState(5),
@@ -212,6 +218,8 @@ export default function App() {
             model_name: selectedModel,
             acceptance_profile: acceptanceProfile,
             parent_run_id: parentRunId,
+            annotation_ids:
+              annotationSelection?.parent === parentRunId ? annotationSelection.ids : [],
             reference_ids: referenceIds,
             knowledge_collection_ids: knowledgeIds,
             remote_knowledge_ids: remoteIds,
@@ -568,6 +576,19 @@ export default function App() {
                 </div>
                 {error && <div className="inline-state error">{error}</div>}
               </section>
+              <TemplatePicker
+                key={selectionRevision}
+                disabled={busy || !!parentRunId}
+                model={selectedModel}
+                budget={runBudget}
+                steps={stepLimit}
+                onSelect={(id) => {
+                  if (isCurrentSelection(selectionRevision)) {
+                    setRun(null)
+                    setDesignId(id)
+                  }
+                }}
+              />
               {capabilities?.design_review_required && (
                 <DesignStudio
                   key={selectionRevision + ':' + designId}
@@ -827,8 +848,30 @@ export default function App() {
                         {isTerminal && (
                           <DeliveryCenter key={run.run_id + '-delivery'} runId={run.run_id} />
                         )}
+                        <CollaborationPanel
+                          key={selectionRevision + '-collaboration'}
+                          runId={run.run_id}
+                          status={run.status}
+                          onRefresh={() => void updateRun(run.run_id).catch(() => {})}
+                        />
                         {run.build_status === 'passed' && (
                           <ProductPreview
+                            key={selectionRevision + '-preview'}
+                            onDraft={
+                              run.status === 'completed'
+                                ? (ids, text) => {
+                                    if (!isCurrentSelection(selectionRevision)) return
+                                    setParentRunId(run.run_id)
+                                    setApplicationType(
+                                      run.product_spec?.application_type ?? 'frontend',
+                                    )
+                                    setAnnotationSelection({ parent: run.run_id, ids })
+                                    setRequest('根据选中的页面意见修改，保留其他功能：\n' + text)
+                                    setDesignId(null)
+                                    window.scrollTo({ top: 0, behavior: 'smooth' })
+                                  }
+                                : undefined
+                            }
                             runId={run.run_id}
                             staticPreview={!!run.artifact_paths?.preview}
                           />

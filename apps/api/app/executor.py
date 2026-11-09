@@ -53,8 +53,8 @@ def _context(state: dict) -> dict:
     bounded = recent_results(history, budget=22000)
     from .references import summaries
     from .library import sources
-    from . import research
-    return {'research_enabled':state.get('research_enabled',False),'web_sources':research.summaries(research.run_snapshot(state['run_id'],state.get('web_snapshot',[]))),'knowledge_sources':sources(state.get('knowledge_context')),'reference_sources':summaries(state.get('reference_snapshot',[])),'request':state.get('change_request') or state['user_request'],'spec':state.get('product_spec'),
+    from . import research, collaboration
+    return {'collaboration':collaboration.context(state),'research_enabled':state.get('research_enabled',False),'web_sources':research.summaries(research.run_snapshot(state['run_id'],state.get('web_snapshot',[]))),'knowledge_sources':sources(state.get('knowledge_context')),'reference_sources':summaries(state.get('reference_snapshot',[])),'request':state.get('change_request') or state['user_request'],'spec':state.get('product_spec'),
         'acceptance_criteria':state.get('acceptance_criteria'), 'profile':state.get('acceptance_profile','generated'),
         'tasks':state.get('executor_tasks',[]),'current_task':task,'manifest':project.manifest(state['run_id']),
         'source_index':source_index(project.sources(state['run_id']),task,budget=6000),
@@ -63,7 +63,7 @@ def _context(state: dict) -> dict:
         'repair_failure':state.get('last_error','')[-7000:] if state.get('execution_mode') == 'repair' else '',
         'repair_plan':state.get('plan_details') if state.get('execution_mode') == 'repair' else None,
         'review_issues':state.get('review_issues',[]),'review_feedback':state.get('review_report') if state.get('orchestration_version')==1 else None,
-        'project_limits':{'max_pages':12,'max_files':project.MAX_FILES,'max_file_bytes':project.MAX_FILE_BYTES,'max_total_bytes':project.MAX_TOTAL_BYTES},'tools':[tool for tool in tools.catalog() if state.get('research_enabled') or tool['name'] not in {'web.search','web.read'}]}
+        'project_limits':{'max_pages':12,'max_files':project.MAX_FILES,'max_file_bytes':project.MAX_FILE_BYTES,'max_total_bytes':project.MAX_TOTAL_BYTES},'tools':[tool for tool in tools.catalog() if (state.get('research_enabled') or tool['name'] not in {'web.search','web.read'}) and (state.get('collaboration_version')==1 or tool['name']!='user.clarify')]}
 
 
 def decide(state: dict) -> dict:

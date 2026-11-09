@@ -51,7 +51,7 @@ class ModelOutputInvalid(ModelCallFailed):
         self.usage = usage or {}
 
 
-ExecutorTool = Literal['web.search','web.read','web.read_evidence','knowledge.read_evidence','reference.read','project.list_files','project.route_template','project.request_dependency','project.read_file','project.apply_changes','project.build','project.test','git.snapshot','git.versions','git.restore']
+ExecutorTool = Literal['user.clarify','web.search','web.read','web.read_evidence','knowledge.read_evidence','reference.read','project.list_files','project.route_template','project.request_dependency','project.read_file','project.apply_changes','project.build','project.test','git.snapshot','git.versions','git.restore']
 
 
 class ProductSpec(BaseModel):

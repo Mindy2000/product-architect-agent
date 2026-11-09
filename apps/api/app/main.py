@@ -20,7 +20,12 @@ from .runner import SandboxError, worker_image_available
 from . import store, workbench, regression, acceptance
 from . import designs, references, knowledge, library, history, maintenance, operations, dify, dependencies, source_import, model_capabilities, vision, fullstack, application_storage, research
 
-app = FastAPI(title="Product Architect Agent", version="0.4.1", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Product Architect Agent", version="0.5.0", docs_url=None, redoc_url=None, openapi_url=None)
+from . import collaboration,page_feedback,capability_templates,evaluation
+app.include_router(collaboration.router)
+app.include_router(page_feedback.router)
+app.include_router(capability_templates.router)
+app.include_router(evaluation.router)
 app.include_router(workbench.router)
 app.include_router(acceptance.router)
 app.include_router(regression.router)
@@ -204,6 +209,7 @@ def capabilities():
         "runtime_version": 3,
         "orchestration_version": 1,
         "team_policy_version": 1,
+        "collaboration_version": 1,
         "tool_protocol_version": 1,
         "file_policy": {"max_files":128,"max_file_bytes":65536,"max_total_bytes":2097152,"editable_roots":["src","tests"]},
         "execution_defaults": {"step_limit":40,"run_budget_cny":5,"model_call_limit":80},
@@ -232,6 +238,11 @@ def create_run(payload: RunRequest, background_tasks: BackgroundTasks):
         "runtime_version": 3,
         "orchestration_version": 1,
         "team_policy_version": 1,
+        "collaboration_version": 1,
+        "project_rules": proposal.get("project_rules",[]),
+        "selected_annotations": proposal.get("selected_annotations",[]),
+        "template_id": proposal.get("template_id"),
+        "template_digest": proposal.get("template_digest"),
         "design_id": run_id,
         "design_revision": proposal['revision'],
         "requirements_confirmed": True,
@@ -352,6 +363,7 @@ def resume_run(run_id: str, background_tasks: BackgroundTasks):
     if state is None:
         raise HTTPException(status_code=404, detail="Run not found")
     if store.cancellation(run_id):raise HTTPException(409,"已取消任务不能继续付费执行，请创建新的修改任务。")
+    if collaboration.pending(run_id):raise HTTPException(409,"请先回答待澄清问题，再继续任务。")
     snapshot = workflow.get_state({"configurable": {"thread_id": run_id}})
     if not snapshot or not snapshot.next:
         raise HTTPException(status_code=409, detail="This run has no pending checkpoint to resume")
@@ -482,7 +494,7 @@ def restore_version(run_id: str, payload: RestoreRequest, background_tasks: Back
 
 
 class PreviewAction(BaseModel):
-    action: Literal["click","type","key","scroll","reload","snapshot"]
+    action: Literal["click","inspect","type","key","scroll","reload","snapshot"]
     x: int = Field(default=0, ge=0, le=1000)
     y: int = Field(default=0, ge=-2000, le=2000)
     text: str = Field(default="", max_length=500)

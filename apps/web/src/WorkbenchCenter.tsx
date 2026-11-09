@@ -1,3 +1,4 @@
+import EvaluationCenter from './EvaluationCenter'
 import { API_BASE, apiFetch } from './api'
 import { useEffect, useState } from 'react'
 import MaintenanceJob, { MaintenanceHistory, startLocalJob, type LocalJob } from './MaintenanceJob'
@@ -583,6 +584,7 @@ export default function WorkbenchCenter({ onBack }: { onBack: () => void }) {
       <SetupWizard onBack={onBack} />
       <WorkbenchBackup />
       <Diagnostics />
+      <EvaluationCenter />
       <MaintenanceHistory />
     </div>
   )

@@ -246,7 +246,7 @@ def download_diagnostic(token:uuid.UUID):
 
 
 class JobRequest(Contract):
- kind:str=Field(pattern=r'^(backup|restore|regression)$')
+ kind:str=Field(pattern=r'^(backup|restore|regression|evaluation)$')
  token:uuid.UUID|None=None
  run_id:uuid.UUID|None=None
  confirmed:bool=False
@@ -281,6 +281,9 @@ def start_maintenance_job(payload:JobRequest):
    if not path.is_file() or time.time()-path.stat().st_mtime>86400:raise archive.ArchiveError('备份预览已过期，请重新选择。')
    if payload.expected_sha256 and archive.file_sha(path)!=payload.expected_sha256:raise archive.ArchiveError('备份已变化，请重新预览确认。')
    return archive.restore(base,path,payload.token,progress,cancelled)
+  if payload.kind=='evaluation':
+   from .evaluation import execute_job as evaluate
+   return evaluate(base,identifier,progress,cancelled)
   from .regression import execute_job
   return execute_job(base,str(payload.run_id),identifier,progress,cancelled)
  return jobs.start(base,payload.kind,payload.model_dump(mode='json'),operation)

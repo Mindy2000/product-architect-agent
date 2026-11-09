@@ -51,6 +51,7 @@ class DesignRequest(BaseModel):
     request: str = Field(min_length=10,max_length=5000)
     model_name: Literal['deepseek-flash','deepseek-v4-pro'] = 'deepseek-flash'
     parent_run_id: uuid.UUID | None = None
+    annotation_ids: list[uuid.UUID] = Field(default_factory=list,max_length=8)
     acceptance_profile: Literal['generated','todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1'] = 'generated'
     execution_step_limit: int = Field(default=40,ge=8,le=64)
     run_budget_cny: float = Field(default=5,ge=0.25,le=20)
@@ -145,6 +146,7 @@ def generate(design_id: str):
             '本阶段只整理方案、不输出代码，但这只是当前操作阶段，不是产品功能限制；不要把不生成代码、等待确认、不启动开发等阶段说明写入产品摘要、核心功能或non_goals。',
             json.dumps({'application_type':value.get('application_type','frontend'),'request':value['request'],'previous_spec':value.get('spec'),'feedback':value.get('feedback'),
                 'existing_product':({key:item for key,item in (parent.get('product_spec') or {}).items() if key in {'product_name','summary','pages','page_details'}} if parent and parent.get('source_import') else parent.get('product_spec') if parent else None),
+                'project_rules':value.get('project_rules',[]),'page_feedback':value.get('selected_annotations',[]),
                 'existing_source_unvalidated':bool(parent and parent.get('source_import')),
                 'existing_acceptance':parent.get('acceptance_criteria') if parent and not parent.get('source_import') else None,'reference_materials':references.prompt_context(value.get('reference_snapshot',[])),'knowledge_evidence':value.get('knowledge_context'),'public_web_sources':value.get('web_snapshot',[])},ensure_ascii=False),
             ProductDesign,max_tokens=7000,model_name=value['model_name'])
@@ -177,13 +179,16 @@ def create_design(payload: DesignRequest, background_tasks: BackgroundTasks):
         parent = store.get_run(str(payload.parent_run_id))
         if not parent or not (parent.get('status') == 'completed' or (parent.get('status') == 'paused' and (parent.get('source_import') or parent.get('local_data_restored')))): raise HTTPException(409,'请选择已通过验收的项目，或已导入/恢复且暂停的本地项目。')
         if payload.application_type!=(parent.get('product_spec') or {}).get('application_type','frontend'):raise HTTPException(409,'维护任务须沿用原应用类型。')
+    from . import collaboration,page_feedback
+    selected=page_feedback.freeze_notes(payload.parent_run_id,payload.annotation_ids)
+    project_rules=collaboration.freeze_rules(payload.parent_run_id)
     if payload.web_source_ids and not payload.research_enabled:raise HTTPException(422,'请先允许本任务使用公开网页资料。')
     try:web_snapshot=research.freeze([str(item) for item in payload.web_source_ids]) if payload.research_enabled else []
     except research.ResearchError as error:raise HTTPException(409,str(error)) from error
     frozen=references.freeze([str(item) for item in payload.reference_ids])
     evidence=capture_knowledge([str(item) for item in payload.knowledge_collection_ids],[str(item) for item in payload.remote_knowledge_ids],payload.request)
     now = datetime.now(timezone.utc).isoformat()
-    value = {**payload.model_dump(mode='json'),'design_id':str(uuid.uuid4()),'revision':0,'status':'generating',
+    value = {'project_rules':project_rules,'selected_annotations':selected,**payload.model_dump(mode='json'),'design_id':str(uuid.uuid4()),'revision':0,'status':'generating',
         'reference_snapshot':frozen,'knowledge_context':evidence,'web_snapshot':web_snapshot,'spec':None,'error':'','history':[],'created_at':now,'updated_at':now}
     conn = connection()
     try:

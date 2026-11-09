@@ -19,12 +19,15 @@ const {chromium} = require('/opt/worker/node_modules/playwright');
  const context=await browser.newContext({viewport:{width:1000,height:720},...(fs.existsSync(state)?{storageState:state}:{})});
  const page=await context.newPage();
  await page.goto('http://127.0.0.1:4173',{waitUntil:'networkidle'});
- const send=async()=>{await context.storageState({path:state}); const png=await page.screenshot();process.stdout.write(JSON.stringify({ok:true,image:png.toString('base64'),width:1000,height:720})+'\n');};
+ let selection=null;
+ const send=async()=>{await context.storageState({path:state}); const png=await page.screenshot();process.stdout.write(JSON.stringify({ok:true,image:png.toString('base64'),width:1000,height:720,route:new URL(page.url()).pathname+new URL(page.url()).hash,selection})+'\n');};
  await send();
  for await(const line of readline.createInterface({input:process.stdin,crlfDelay:Infinity})) {
   try {
    const a=JSON.parse(line);
-   if(a.action==='click')await page.mouse.click(a.x,a.y);
+   selection=null;
+   if(a.action==='inspect'){selection=await page.evaluate(({x,y})=>{const e=document.elementFromPoint(x,y);if(!e)return null;const r=e.getBoundingClientRect();let n=e;const parts=[];for(let i=0;n&&i<5;i++,n=n.parentElement){const siblings=n.parentElement?[...n.parentElement.children].filter(v=>v.tagName===n.tagName):[n];parts.unshift(n.tagName.toLowerCase()+':nth-of-type('+(siblings.indexOf(n)+1)+')')}return {tag:e.tagName.toLowerCase(),text:(e.textContent||'').trim().slice(0,200),selector:parts.join(' > '),rect:{x:r.x,y:r.y,width:r.width,height:r.height}}},{x:a.x,y:a.y});}
+   else if(a.action==='click')await page.mouse.click(a.x,a.y);
    else if(a.action==='type')await page.keyboard.insertText(a.text);
    else if(a.action==='key')await page.keyboard.press(a.key);
    else if(a.action==='scroll')await page.mouse.wheel(0,a.y);

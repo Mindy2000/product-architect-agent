@@ -1,0 +1,60 @@
+{
+  "id": "form",
+  "version": 1,
+  "spec": {
+    "product_name": "报名表单",
+    "summary": "本地表单校验、保存与记录管理",
+    "target_users": [
+      "个人用户"
+    ],
+    "pages": [
+      "报名表单"
+    ],
+    "core_features": [
+      "填写姓名与邮箱",
+      "必填和邮箱格式校验",
+      "保存后清空表单",
+      "刷新后查看已保存记录"
+    ],
+    "assumptions": [
+      "仅本地单用户"
+    ],
+    "non_goals": [
+      "账号与远程服务"
+    ],
+    "acceptance_criteria": [
+      "填写姓名与邮箱",
+      "必填和邮箱格式校验",
+      "保存后清空表单",
+      "刷新后查看已保存记录"
+    ],
+    "application_type": "frontend",
+    "crud_schema": null,
+    "page_details": [
+      {
+        "name": "报名表单",
+        "route": "/",
+        "purpose": "本地表单校验、保存与记录管理",
+        "sections": [
+          "操作区",
+          "记录区"
+        ],
+        "interactions": [
+          "填写姓名与邮箱",
+          "必填和邮箱格式校验",
+          "保存后清空表单",
+          "刷新后查看已保存记录"
+        ]
+      }
+    ],
+    "visual_direction": "中文清晰布局，深蓝与浅灰，适配窄屏",
+    "data_notes": [
+      "独立localStorage键，数据仅保存在浏览器"
+    ]
+  },
+  "files": {
+    "src/App.tsx": "import {useState} from 'react'\nexport default function App(){const [rows,setRows]=useState<{name:string,email:string}[]>(()=>{try{return JSON.parse(localStorage.getItem('pa-template-form')||'[]')}catch{return []}}),[name,setName]=useState(''),[email,setEmail]=useState('');return <main><h1>报名表单</h1><form onSubmit={e=>{e.preventDefault();const next=[...rows,{name,email}];setRows(next);localStorage.setItem('pa-template-form',JSON.stringify(next));setName('');setEmail('')}}><label>姓名<input required value={name} onChange={e=>setName(e.target.value)}/></label><label>邮箱<input required type=\"email\" value={email} onChange={e=>setEmail(e.target.value)}/></label><button>保存报名</button></form><h2>已保存记录</h2><ul>{rows.map((x,i)=><li key={i}>{x.name} · {x.email}</li>)}</ul></main>}\n",
+    "src/style.css": ":root{font-family:system-ui;color:#16324f;background:#f1f5f9}body{margin:0}main{max-width:900px;margin:48px auto;padding:32px;background:white;border-radius:20px}h1{font-size:32px}button,input,select{font:inherit;padding:10px;margin:8px;border:1px solid #cbd5e1;border-radius:8px}button{background:#16324f;color:white;cursor:pointer}li{padding:12px;border-bottom:1px solid #e2e8f0}label{display:block}.metrics{display:flex;gap:16px;flex-wrap:wrap}.metric{padding:24px;background:#edf5ff;border-radius:12px}",
+    "tests/e2e.spec.ts": "import {test,expect} from '@playwright/test'\ntest('报名表单模板核心流程',async({page})=>{await page.goto('/');await page.getByLabel('姓名', {exact:true}).fill('测试用户');await page.getByLabel('邮箱', {exact:true}).fill('test@example.com');await page.getByRole('button',{name:'保存报名'}).click();await page.reload();await expect(page.getByRole('listitem')).toContainText('测试用户');})\n"
+  }
+}

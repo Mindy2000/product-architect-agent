@@ -1,23 +1,30 @@
 import { API_BASE, apiFetch } from './api'
+import PreviewFeedback, { type Selection } from './PreviewFeedback'
 import { useEffect, useState, useRef } from 'react'
 const API = API_BASE
-type Frame = { image: string; width: number; height: number }
+type Frame = { image: string; width: number; height: number; selection?: Selection | null }
 export default function ProductPreview({
   runId,
   staticPreview,
+  onDraft,
 }: {
   runId: string
   staticPreview?: boolean
+  onDraft?: (ids: string[], text: string) => void
 }) {
+  const alive = useRef(true)
   const ownedRun = useRef<string | null>(null)
   const [frame, setFrame] = useState<Frame | null>(null)
+  const [inspectMode, setInspectMode] = useState(false)
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [text, setText] = useState('')
   useEffect(() => {
+    alive.current = true
     setFrame(null)
     setError('')
     return () => {
+      alive.current = false
       if (ownedRun.current === runId) {
         ownedRun.current = null
         void apiFetch(`${API}/runs/${runId}/preview/close`, { method: 'POST' }).catch(() => {})
@@ -37,6 +44,11 @@ export default function ProductPreview({
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail ?? '预览操作失败')
+      if (!alive.current) {
+        if (path === 'open')
+          await apiFetch(`${API}/runs/${runId}/preview/close`, { method: 'POST' }).catch(() => {})
+        return false
+      }
       if (path === 'close') {
         ownedRun.current = null
         setFrame(null)
@@ -44,8 +56,10 @@ export default function ProductPreview({
         if (path === 'open') ownedRun.current = runId
         setFrame(d)
       }
+      return true
     } catch (e) {
       setError(e instanceof Error ? e.message : '预览操作失败')
+      return false
     } finally {
       setBusy(false)
     }
@@ -70,6 +84,13 @@ export default function ProductPreview({
       ) : (
         <>
           <div className="preview-tools">
+            <button
+              disabled={busy}
+              aria-pressed={inspectMode}
+              onClick={() => setInspectMode(!inspectMode)}
+            >
+              {inspectMode ? '返回交互模式' : '点选修改模式'}
+            </button>
             <input
               aria-label="输入到预览控件的文字"
               value={text}
@@ -113,7 +134,13 @@ export default function ProductPreview({
               关闭预览
             </button>
           </div>
-          <div aria-live="polite">{busy ? '正在执行预览操作…' : '点击下方页面进行操作'}</div>
+          <div aria-live="polite">
+            {busy
+              ? '正在执行预览操作…'
+              : inspectMode
+                ? '点击下方元素选择修改位置，不会触发页面控件'
+                : '点击下方页面进行操作'}
+          </div>
           <img
             className="product-preview interactive"
             src={'data:image/png;base64,' + frame.image}
@@ -121,7 +148,7 @@ export default function ProductPreview({
             onClick={(e) => {
               const box = e.currentTarget.getBoundingClientRect()
               void send('action', {
-                action: 'click',
+                action: inspectMode ? 'inspect' : 'click',
                 x: Math.round(((e.clientX - box.left) / box.width) * frame.width),
                 y: Math.round(((e.clientY - box.top) / box.height) * frame.height),
               })
@@ -129,6 +156,21 @@ export default function ProductPreview({
           />
         </>
       )}
+      <PreviewFeedback
+        key={runId}
+        runId={runId}
+        selection={frame?.selection}
+        hasFrame={!!frame}
+        onDraft={
+          onDraft
+            ? (ids, text) => {
+                void send('close').then((ok) => {
+                  if (ok) onDraft(ids, text)
+                })
+              }
+            : undefined
+        }
+      />
       {error && <div className="inline-state error">{error}</div>}
     </section>
   )

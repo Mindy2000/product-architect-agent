@@ -1,0 +1,60 @@
+{
+  "id": "dashboard",
+  "version": 1,
+  "spec": {
+    "product_name": "数据仪表盘",
+    "summary": "本地录入数值、查看汇总与记录",
+    "target_users": [
+      "个人用户"
+    ],
+    "pages": [
+      "数据仪表盘"
+    ],
+    "core_features": [
+      "录入有效数值",
+      "汇总记录数量",
+      "计算数值合计",
+      "刷新后记录和汇总保留"
+    ],
+    "assumptions": [
+      "仅本地单用户"
+    ],
+    "non_goals": [
+      "账号与远程服务"
+    ],
+    "acceptance_criteria": [
+      "录入有效数值",
+      "汇总记录数量",
+      "计算数值合计",
+      "刷新后记录和汇总保留"
+    ],
+    "application_type": "frontend",
+    "crud_schema": null,
+    "page_details": [
+      {
+        "name": "数据仪表盘",
+        "route": "/",
+        "purpose": "本地录入数值、查看汇总与记录",
+        "sections": [
+          "操作区",
+          "记录区"
+        ],
+        "interactions": [
+          "录入有效数值",
+          "汇总记录数量",
+          "计算数值合计",
+          "刷新后记录和汇总保留"
+        ]
+      }
+    ],
+    "visual_direction": "中文清晰布局，深蓝与浅灰，适配窄屏",
+    "data_notes": [
+      "独立localStorage键，数据仅保存在浏览器"
+    ]
+  },
+  "files": {
+    "src/App.tsx": "import {useState} from 'react'\nexport default function App(){const [rows,setRows]=useState<number[]>(()=>{try{return JSON.parse(localStorage.getItem('pa-template-dashboard')||'[]')}catch{return []}}),[value,setValue]=useState('');const total=rows.reduce((a,b)=>a+b,0);return <main><h1>数据仪表盘</h1><div className=\"metrics\"><section className=\"metric\">记录数 <b data-testid=\"count\">{rows.length}</b></section><section className=\"metric\">合计 <b data-testid=\"total\">{total.toFixed(2)}</b></section></div><form onSubmit={e=>{e.preventDefault();const n=Number(value);if(Number.isFinite(n)){const next=[...rows,n];setRows(next);localStorage.setItem('pa-template-dashboard',JSON.stringify(next));setValue('')}}}><label>数值<input required type=\"number\" step=\"0.01\" value={value} onChange={e=>setValue(e.target.value)}/></label><button>添加记录</button></form><ul>{rows.map((n,i)=><li key={i}>{n.toFixed(2)}</li>)}</ul></main>}\n",
+    "src/style.css": ":root{font-family:system-ui;color:#16324f;background:#f1f5f9}body{margin:0}main{max-width:900px;margin:48px auto;padding:32px;background:white;border-radius:20px}h1{font-size:32px}button,input,select{font:inherit;padding:10px;margin:8px;border:1px solid #cbd5e1;border-radius:8px}button{background:#16324f;color:white;cursor:pointer}li{padding:12px;border-bottom:1px solid #e2e8f0}label{display:block}.metrics{display:flex;gap:16px;flex-wrap:wrap}.metric{padding:24px;background:#edf5ff;border-radius:12px}",
+    "tests/e2e.spec.ts": "import {test,expect} from '@playwright/test'\ntest('数据仪表盘模板核心流程',async({page})=>{await page.goto('/');await page.getByLabel('数值', {exact:true}).fill('12.5');await page.getByRole('button',{name:'添加记录'}).click();await page.reload();await expect(page.getByTestId('count')).toHaveText('1');await expect(page.getByTestId('total')).toHaveText('12.50');})\n"
+  }
+}

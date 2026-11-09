@@ -11,7 +11,7 @@ class PreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             identifier=str(uuid.uuid4());root=Path(tmp)/'generated-projects'/identifier;(root/'dist').mkdir(parents=True);(root/'dist/index.html').write_text('<div/>')
             process=MagicMock()
-            with patch.object(preview,'workspace_for',return_value=root),patch.object(preview.subprocess,'Popen',return_value=process) as popen,patch.object(preview.Preview,'read',return_value={'ok':True}),patch.object(preview.subprocess,'run'):
+            with patch.object(preview,'workspace_for',return_value=root),patch('app.project.manifest',return_value={'digest':'source'}),patch('app.runtime_identity.require',return_value={'image_id':'sha256:'+('1'*64),'digest':'env'}),patch.object(preview.subprocess,'Popen',return_value=process) as popen,patch.object(preview.Preview,'read',return_value={'ok':True}),patch.object(preview.subprocess,'run'):
                 session=preview.Preview(identifier);session.close()
             command=popen.call_args.args[0]
             for flag in ('-i','--network=none','--read-only','--cap-drop=ALL','--user=pwuser'):

@@ -39,6 +39,9 @@ type Draft = {
   knowledge_retrieval?: { query?: string; retrieval_id?: string }
   reference_ids?: string[]
   reference_sources?: ReferenceSource[]
+  template_id?: string
+  project_rules?: { id: string; title: string; content: string; revision: number }[]
+  selected_annotations?: { id: string; comment: string; mapping: string; candidates: string[] }[]
   design_id: string
   revision: number
   status: string
@@ -373,6 +376,31 @@ export default function DesignStudio({
             模型：{draft.model_name} · 开发执行上限：{draft.execution_step_limit} 步 ·
             方案与开发共用上述费用上限
           </p>
+          {draft.template_id ||
+          draft.project_rules?.length ||
+          draft.selected_annotations?.length ? (
+            <details className="expansion-panel">
+              <summary>本方案的模板、规则与页面意见</summary>
+              {draft.template_id && (
+                <p>起始模板：{draft.template_id}；确认开发后使用受控源码起点。</p>
+              )}
+              {draft.project_rules?.map((r) => (
+                <p key={r.id}>
+                  {r.title} · 修订 {r.revision}：{r.content}
+                </p>
+              ))}
+              {draft.selected_annotations?.map((n) => (
+                <p key={n.id}>
+                  {n.comment}
+                  <small>
+                    {' '}
+                    · {n.mapping}：{n.candidates.join('、') || '需读取定位'}
+                  </small>
+                </p>
+              ))}
+              <small>这些内容随方案保存。后续修改长期规则，不会静默改写本方案。</small>
+            </details>
+          ) : null}
           <button
             className="text-button"
             disabled={busy}
@@ -655,10 +683,12 @@ export default function DesignStudio({
                 <p key={index}>
                   修订 {entry.revision} ·{' '}
                   {(
-                    { generated: '模型生成', edited: '手动编辑', confirmed: '确认开发' } as Record<
-                      string,
-                      string
-                    >
+                    {
+                      generated: '模型生成',
+                      edited: '手动编辑',
+                      confirmed: '确认开发',
+                      template: '本地模板',
+                    } as Record<string, string>
                   )[entry.action] ?? entry.action}{' '}
                   · {new Date(entry.at).toLocaleString('zh-CN')}
                 </p>

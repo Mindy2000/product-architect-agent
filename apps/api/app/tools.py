@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from . import runner, project, research
+from . import runner, project, research, collaboration
 
 
 class Arguments(BaseModel):
@@ -249,6 +249,7 @@ def _web_evidence(context,args):
 
 TOOLS = {
     spec.name:spec for spec in (
+        ToolSpec('user.clarify','仅遇到影响实现的真实歧义时提问，2–3个选项；最多三问，回答不改变冻结范围或预算。',collaboration.QuestionInput,collaboration.ask,10,True),
         ToolSpec('web.search','仅任务允许联网时搜索免费公开目录/维基百科/GitHub公开仓库；结果摘要不等于正文。',research.SearchInput,_web_search,35,False),
         ToolSpec('web.read','读取公开HTTPS网页并冻结来源，禁止私网/登录/凭证；不执行页面脚本。',research.ReadInput,_web_read,40,False),
         ToolSpec('web.read_evidence','仅阅读本任务冻结网页快照，不联网。',WebEvidenceArgs,_web_evidence,10,True),

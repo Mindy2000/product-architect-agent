@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 const API = API_BASE + '/workbench'
 export type LocalJob = {
   id: string
-  kind: 'backup' | 'restore' | 'regression'
+  kind: 'backup' | 'restore' | 'regression' | 'evaluation'
   status: string
   phase: string
   progress_percent: number
@@ -50,6 +50,7 @@ const titles: Record<string, string> = {
   backup: '工作台备份',
   restore: '工作台恢复',
   regression: '父子版本回归',
+  evaluation: '本地离线评测',
 }
 const labels: Record<string, string> = {
   queued: '排队中',

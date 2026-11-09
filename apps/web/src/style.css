@@ -2161,3 +2161,109 @@ header {
     padding: 14px;
   }
 }
+
+.expansion-panel {
+  margin: 18px 0;
+  padding: 20px;
+  border: 1px solid #dce4ed;
+  border-radius: 14px;
+  background: #fbfdff;
+}
+.expansion-panel h3 {
+  margin-top: 0;
+}
+.expansion-panel label {
+  display: block;
+  margin: 12px 0;
+}
+.expansion-panel input:not([type='checkbox']),
+.expansion-panel textarea,
+.expansion-panel select {
+  width: 100%;
+  max-width: 680px;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+.expansion-panel textarea {
+  min-height: 80px;
+}
+.expansion-panel button {
+  margin: 8px 8px 8px 0;
+}
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.template-grid article,
+.rule-card,
+.clarification-card {
+  padding: 16px;
+  background: white;
+  border: 1px solid #dce4ed;
+  border-radius: 10px;
+  margin: 10px 0;
+}
+.clarification-card {
+  border-color: #527cba;
+}
+.visual-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.visual-comparison img {
+  width: 100%;
+  border: 1px solid #dce4ed;
+}
+.table-scroll {
+  max-width: 100%;
+  overflow: auto;
+}
+.expansion-panel table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.expansion-panel th,
+.expansion-panel td {
+  padding: 10px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+}
+.expansion-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin: 10px 0;
+}
+.expansion-panel small {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .visual-comparison {
+    grid-template-columns: 1fr;
+  }
+  .expansion-panel {
+    padding: 12px;
+  }
+}
+
+.expansion-panel button {
+  padding: 8px 12px;
+  border: 1px solid #ccd8e5;
+  border-radius: 8px;
+  background: #fff;
+  color: #234260;
+  font: inherit;
+  cursor: pointer;
+}
+.expansion-panel button:hover:not(:disabled) {
+  background: #eef4fb;
+  border-color: #8faac7;
+}
+.expansion-panel button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
