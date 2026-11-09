@@ -108,6 +108,9 @@ class EvolutionTests(unittest.TestCase):
   with self.assertRaises(ValidationError):replay.Decision(action='shell',path='rm')
   b=replay.preview_binding(uuid.UUID(self.rid));branch=replay.Branch(label='限额',decisions=[replay.Decision(action='read_file',path='src/App.tsx')]*3)
   v=replay.compare(uuid.UUID(self.rid),replay.ReplayInput(token=b['token'],step_limit=1,branches=[branch,branch]));self.assertEqual(v['branches'][0]['steps'],1);self.assertEqual(v['branches'][0]['stop_reason'],'达到分支步骤上限')
+ def test_replay_redaction_preserves_json_with_quoted_credentials(self):
+  data={'input':{'text':'example Bearer test-token"suffix'},'events':['sk-'+('x'*20)]}
+  sanitized=replay.redact_tree(data);encoded=json.dumps(sanitized);self.assertNotIn('test-token',encoded);self.assertEqual(json.loads(encoded),sanitized)
  def test_report_comparison_does_not_rank_different_suites(self):
   old={'suite_digest':'a','source_version':'0.5','cases':[{'case':'tasks','strategy':'fixed','mechanism_passed':True,'seconds':2}]};new={**old,'suite_digest':'b','source_version':'0.6'}
   result=evaluation.compare_reports(old,new);self.assertFalse(result['same_suite']);self.assertFalse(result['rows'][0]['comparable'])

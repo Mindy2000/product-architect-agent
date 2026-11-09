@@ -9,6 +9,11 @@ from . import collaboration as c,project,runner,store,tools,team
 from .security_policy import redact
 router=APIRouter(prefix='/api/v1/replay')
 
+def redact_tree(value):
+    if isinstance(value,dict):return {redact(k):redact_tree(v) for k,v in value.items()}
+    if isinstance(value,list):return [redact_tree(v) for v in value]
+    return redact(value) if isinstance(value,str) else value
+
 def hashed(v):return hashlib.sha256(json.dumps(v,sort_keys=True,ensure_ascii=False,default=str).encode()).hexdigest()
 
 def snapshot(rid,point='current'):
@@ -68,8 +73,8 @@ def binding(rid,point):
 @router.get('/{rid}')
 def timeline(rid:uuid.UUID):
     state,events,points=collect(str(rid))
-    return json.loads(redact(json.dumps({'events':events,'points':points,'status':state.get('status'),'stop_reason':state.get('error') or state.get('team_stop_reason') or state.get('execution_incomplete'),
-        'checkpoints':graph_checkpoints(str(rid)),'branches':c.records(str(rid),'replay'),'notice':'按真实回执查看。旧任务缺少记录时不补造；源码检查点不是完整运行时快照。固定决策分支只核对源码与资源规则，不恢复真实模型或数据库副作用。'},ensure_ascii=False)))
+    return redact_tree({'events':events,'points':points,'status':state.get('status'),'stop_reason':state.get('error') or state.get('team_stop_reason') or state.get('execution_incomplete'),
+        'checkpoints':graph_checkpoints(str(rid)),'branches':c.records(str(rid),'replay'),'notice':'按真实回执查看。旧任务缺少记录时不补造；源码检查点不是完整运行时快照。固定决策分支只核对源码与资源规则，不恢复真实模型或数据库副作用。'})
 
 @router.get('/{rid}/binding')
 def preview_binding(rid:uuid.UUID,point:str='current'):
