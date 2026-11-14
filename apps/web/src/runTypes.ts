@@ -63,6 +63,8 @@ export type RunRecord = {
   status: string
   repair_round: number
   parent_run_id?: string
+  role_models?: Record<string, string>
+  review_context_version?: number
   model_name?: string
   can_resume?: boolean
   user_request?: string

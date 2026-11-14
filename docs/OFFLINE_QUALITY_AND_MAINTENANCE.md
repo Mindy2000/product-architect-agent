@@ -12,6 +12,27 @@
 
 `.github/workflows/offline-quality.yml` 在 main 更新、PR 和手动触发时运行。原生包工作流先依赖该质量检查；这里只配置自动构建，不发布正式 Release。证据为 `offline-quality-evidence`，保留 14 天。可复现报告在 `outputs/offline-quality/report.json`。
 
+### 当前统一入口（0.6.0 候选）
+
+准备锁定依赖、Playwright 浏览器和固定容器镜像后，先停止当前工作台，在工程根目录运行：
+
+```sh
+python -m unittest discover -s tests -v
+npm run test:frontend
+npm run format:check
+npm run typecheck
+npm run build
+python scripts/offline_quality.py --output outputs/offline-quality-new
+```
+
+`python` 指已安装锁定依赖的虚拟环境解释器。默认使用 Playwright 安装的 Chromium；本机已安装 Chrome 时可显式设置 `PA_UI_BROWSER_CHANNEL=chrome` 复用它（CI 仍使用固定 Playwright 浏览器）。输出目录必须新建或为空，避免旧通过证据混入。`--list` 只列清单；`--scenario <名称>` 仅复核受影响场景，不等于完整验收。
+
+默认固定 12 组：ui_workflow、checkpoint_restart、fullstack_roundtrip、workbench_roundtrip、regression_roundtrip、audit_quality、team_checkpoint、team_scenarios、interactive_expansion、interface_feedback、review_submission、review_submission_stop。后三组分别验证交互失败反馈与修复、末步错误后纠正、连续错误在限额内停止。持续错误按预期停止属于该故障测试通过，不是生成任务成功。
+
+每组保存日志及 JSON/截图，总报告包含应执行清单，只有全部完成才标记通过。超时、非零退出或缺失报告均阻止通过。默认关闭 DeepSeek、千问文字和视觉许可，移除继承凭证；在不含用户资料的新源码副本运行固定响应。既有本地 Dify 保护单元测试使用模拟传输，不请求远程 Dify，也不将 Dify 远程问题纳入本轮验收。
+
+冻结验收应先构建界面、生成源码与 macOS 安装 ZIP、记录 SHA256，再从解压的候选目录执行上述检查。只在合成资料副本测试安装/启动/停止/并排升级，保留原工作台和费用。任何源码变化会形成新候选摘要；原失败证据不覆盖。正式发行、Windows 和真实模型复测不由该命令触发。
+
 ## 2. 跨版本恢复
 
 预览返回来源/目标版本、兼容性、迁移步骤与文件摘要。支持同版本，以及已登记的 **0.2.0 → 0.3.0**：只为文档 jobs 表增加 cancel_requested 字段，保持原记录与列。未知版本、降级或破坏性迁移拒绝，需另行决定。

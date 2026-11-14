@@ -69,7 +69,7 @@ try:
   time.sleep(.1)
  assert server.started
  with sync_playwright() as pw:
-  browser=pw.chromium.launch(headless=True)
+  browser=pw.chromium.launch(headless=True,channel=os.environ.get('PA_UI_BROWSER_CHANNEL') or None)
   try:
    page=browser.new_page(viewport={'width':1440,'height':1000},accept_downloads=True)
    page.on('pageerror',lambda e:report['page_errors'].append(str(e)))

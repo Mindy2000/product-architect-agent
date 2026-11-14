@@ -1,0 +1,15 @@
+{
+  "synthetic_only": true,
+  "records": [
+    {
+      "stage": "executor-23",
+      "content": "{\"action\":\"tool\",\"summary\":\"修复测试失败：空列表不可见（ul无内容高度为0）与按钮名称严格匹配问题，调整样式与测试\",\"task_id\":\"task-3\",\"tool\":\"project.apply_changes\",\"arguments\":{\"changes\":[{\"operation\":\"patch\",\"path\":\"src/style.css\",\"expected_sha256\":\"e4621ad043734d435d0da87ddee3d8fa3c17993b96f2a0ef4a3966aa5132094a\",\"edits\":[{\"before\":\".task-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}\",\".task-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;min-height:1px}\"}]},{\"operation\":\"patch\",\"path\":\"tests/task-list.spec.ts\",\"expected_sha256\":\"624de8b0c629fcd933393e0624a8fac5d656c44b7910fc804aecc95293ebce88\",\"edits\":[{\"before\":\"  await expect(list.getByRole('button', { name: '第一条任务' })).toBeVisible();\",\"after\":\"  await expect(list.getByRole('button', { name: '第一条任务', exact: true })).toBeVisible();\"}]}]}}",
+      "error_type": "JSONDecodeError"
+    },
+    {
+      "stage": "executor-24",
+      "content": "{\"action\":\"tool\",\"summary\":\"修复空列表不可见与测试按钮名歧义：给空ul加最小高度并调整测试选择器\",\"task_id\":\"task-3\",\"tool\":\"project.apply_changes\",\"arguments\":{\"changes\":[{\"operation\":\"patch\",\"path\":\"src/style.css\",\"expected_sha256\":\"e4621ad043734d435d0da87ddee3d8fa3c17993b96f2a0ef4a3966aa5132094a\",\"edits\":[{\"before\":\".task-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}\",{\"after\":\".task-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;min-height:1px}\"}]},{\"operation\":\"patch\",\"path\":\"tests/task-list.spec.ts\",\"expected_sha256\":\"624de8b0c629fcd933393e0624a8fac5d656c44b7910fc804aecc95293ebce88\",\"edits\":[{\"before\":\"  await expect(list.getByRole('button', { name: '第一条任务' })).toBeVisible();\",\"after\":\"  await expect(list.getByRole('button', { name: '第一条任务', exact: true })).toBeVisible();\"}]}]}}",
+      "error_type": "JSONDecodeError"
+    }
+  ]
+}

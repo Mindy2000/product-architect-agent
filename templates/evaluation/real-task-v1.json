@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "storage_key": "pa-evaluation-tasks",
+  "seed": [
+    {
+      "id": "a",
+      "title": "甲",
+      "done": false
+    },
+    {
+      "id": "b",
+      "title": "乙",
+      "done": true
+    }
+  ],
+  "baseline_files": {
+    "src/App.tsx": "import {useState} from 'react'\ntype Item = {id: string; title: string; done: boolean}\nexport default function App() {\n  const [items,setItems] = useState<Item[]>(() => JSON.parse(localStorage.getItem('pa-evaluation-tasks') || '[]'))\n  const [title,setTitle] = useState('')\n  const [filter,setFilter] = useState('all')\n  function save(next: Item[]) { setItems(next); localStorage.setItem('pa-evaluation-tasks',JSON.stringify(next)) }\n  const visible = items.filter(item => filter === 'all' || (filter === 'done' ? item.done : !item.done))\n  return <main><h1>任务管理</h1>\n    <label>任务标题<input value={title} onChange={e=>setTitle(e.target.value)}/></label>\n    <button onClick={()=>{if(title.trim()){save([...items,{id:crypto.randomUUID(),title:title.trim(),done:false}]);setTitle('')}}}>添加任务</button>\n    <label>状态筛选<select value={filter} onChange={e=>setFilter(e.target.value)}><option value=\"all\">全部</option><option value=\"open\">未完成</option><option value=\"done\">已完成</option></select></label>\n    <ul>{visible.map(item=><li key={item.id}><label><input type=\"checkbox\" checked={item.done} onChange={()=>save(items.map(i=>i.id===item.id?{...i,done:!i.done}:i))}/>{item.title}</label><button onClick={()=>save(items.filter(i=>i.id!==item.id))}>删除{item.title}</button></li>)}</ul>\n  </main>\n}\n"
+  },
+  "repair_mutation": {
+    "path": "src/App.tsx",
+    "before": "items.filter(item => filter === 'all' || (filter === 'done' ? item.done : !item.done))",
+    "after": "items.filter(() => true)"
+  },
+  "independent_filter_test": "import {test,expect} from '@playwright/test'\ntest('状态筛选独立检查',async({page})=>{\n  await page.addInitScript(()=>{localStorage.setItem('pa-evaluation-tasks',JSON.stringify([{id:'a',title:'甲',done:false},{id:'b',title:'乙',done:true}]))})\n  await page.goto('/')\n  await page.getByLabel('状态筛选').selectOption('open')\n  await expect(page.locator('li')).toHaveCount(1)\n  await expect(page.locator('li')).toContainText('甲')\n  await page.getByLabel('状态筛选').selectOption('done')\n  await expect(page.locator('li')).toHaveCount(1)\n  await expect(page.locator('li')).toContainText('乙')\n})\n",
+  "knowledge_document": "姓名必填；名额 2 人；重复姓名不允许；满额后拒绝新增。",
+  "note": "仅合成评测资料；运行前装入受控工程。测试由评测方保管，生成智能体不得修改独立检查。不得在宿主机运行这些源码。",
+  "crud_schema": {
+    "version": 1,
+    "entities": [
+      {
+        "name": "items",
+        "label": "物品",
+        "fields": [
+          {
+            "name": "name",
+            "type": "text",
+            "required": true,
+            "max_length": 100
+          },
+          {
+            "name": "quantity",
+            "type": "integer",
+            "required": true
+          }
+        ]
+      }
+    ]
+  }
+}

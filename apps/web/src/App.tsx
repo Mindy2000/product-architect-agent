@@ -1,3 +1,6 @@
+import RoleModelPicker, { type RoleModels, textModelOptions } from './RoleModels'
+import RunHistory from './RunHistory'
+import { statusText, stageIndex, stageText } from './runPresentation'
 import { API_BASE, apiFetch } from './api'
 import { useRunSelection } from './useRunSelection'
 import { terminalStates } from './runTypes'
@@ -49,59 +52,6 @@ type Capabilities = {
   sandbox: { ready: boolean }
 }
 
-const statusText: Record<string, string> = {
-  cancelled: '已取消',
-  paused: '已暂停',
-  queued: '排队中',
-  running: '执行中',
-  completed: '执行完成',
-  failed_validation: '交付完成，检查或审查未通过',
-  failed: '运行失败',
-  failed_model: '模型调用失败',
-  failed_sandbox: '隔离环境失败',
-  interrupted: '服务已中断',
-  blocked_budget: '预算达到上限',
-  blocked_configuration: '模型配置待完成',
-}
-const stageIndex: Record<string, number> = {
-  queued: 0,
-  requirements: 0,
-  planning: 1,
-  sandbox: 2,
-  sandbox_ready: 2,
-  generation: 2,
-  project_setup: 2,
-  executor: 2,
-  build: 3,
-  browser_test: 4,
-  repair: 5,
-  diagnosis: 5,
-  review: 5,
-  replanning: 1,
-  delivery: 6,
-}
-const stageText: Record<string, string> = {
-  knowledge: '知识库证据',
-  references: '参考资料',
-  product_design: '产品方案',
-  queued: '已排队',
-  requirements: '需求分析',
-  planning: '开发规划',
-  sandbox: '准备隔离环境',
-  sandbox_ready: '隔离环境就绪',
-  generation: '代码生成',
-  project_setup: '准备项目文件',
-  executor: '任务执行',
-  tool: '工具操作',
-  build: '构建验证',
-  browser_test: '浏览器测试',
-  diagnosis: '失败诊断',
-  review: '独立审查',
-  replanning: '重新规划',
-  repair: '自动修复',
-  delivery: '交付',
-}
-
 export default function App() {
   const [view, setView] = useState<'workspace' | 'projects' | 'trace' | 'settings'>('workspace')
   const [request, setRequest] = useState('')
@@ -126,10 +76,19 @@ export default function App() {
   const [acceptanceProfile, setAcceptanceProfile] = useState('generated')
   const [runBudget, setRunBudget] = useState(5),
     [stepLimit, setStepLimit] = useState(40)
+  const [roleModels, setRoleModels] = useState<RoleModels>({})
   const [selectedModel, setSelectedModel] = useState(() => {
     const saved = localStorage.getItem('product-architect-model')
-    return saved === 'deepseek-v4-pro' ? saved : 'deepseek-flash'
+    return textModelOptions.some((m) => m.id === saved) ? saved! : 'deepseek-flash'
   })
+  useEffect(() => {
+    const changed = () => {
+      const next = localStorage.getItem('product-architect-model')
+      if (next && textModelOptions.some((m) => m.id === next)) setSelectedModel(next)
+    }
+    window.addEventListener('model-default-changed', changed)
+    return () => window.removeEventListener('model-default-changed', changed)
+  }, [])
   const [budget, setBudget] = useState<Budget | null>(null)
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
   const [connectionError, setConnectionError] = useState('')
@@ -162,6 +121,11 @@ export default function App() {
       if (!r.ok) throw new Error('unavailable')
       const next = (await r.json()) as Capabilities
       setCapabilities(next)
+      if (
+        !localStorage.getItem('product-architect-model') &&
+        next.available_models.includes(next.model)
+      )
+        setSelectedModel(next.model)
       setConnectionError('')
       if (!next.model_calls_enabled && !localStorage.getItem('pa-onboarding-dismissed')) {
         localStorage.setItem('pa-onboarding-dismissed', 'true')
@@ -221,6 +185,7 @@ export default function App() {
             research_enabled: researchEnabled,
             web_source_ids: webSourceIds,
             model_name: selectedModel,
+            role_models: roleModels,
             acceptance_profile: acceptanceProfile,
             parent_run_id: parentRunId,
             rule_selection: ruleChoice?.parent === parentRunId ? ruleChoice.value : undefined,
@@ -255,6 +220,7 @@ export default function App() {
           research_enabled: researchEnabled,
           web_source_ids: webSourceIds,
           model_name: selectedModel,
+          role_models: roleModels,
           acceptance_profile: acceptanceProfile,
           parent_run_id: parentRunId,
           ...((capabilities?.runtime_version ?? 0) >= 2
@@ -468,8 +434,10 @@ export default function App() {
                   >
                     <option value="deepseek-flash">DeepSeek Flash · 速度快，适合日常生成</option>
                     <option value="deepseek-v4-pro">DeepSeek V4 Pro · 能力更强，费用更高</option>
+                    <option value="qwen3.8-flash">千问 3.8 Flash · 北京文字通道</option>
                   </select>
-                  <small>仅影响新任务；Pro 按较高费率预留预算。</small>
+                  <small>仅影响新方案；角色可单独设置，共用累计与单任务预算。</small>
+                  <RoleModelPicker value={roleModels} onChange={setRoleModels} disabled={busy} />
                   <label htmlFor="acceptance-choice">验收方式</label>
                   <select
                     id="acceptance-choice"
@@ -593,6 +561,7 @@ export default function App() {
                 key={selectionRevision}
                 disabled={busy || !!parentRunId}
                 model={selectedModel}
+                roleModels={roleModels}
                 budget={runBudget}
                 steps={stepLimit}
                 onSelect={(id) => {
@@ -993,65 +962,7 @@ export default function App() {
                   }}
                 />
               ) : (
-                <div className="history-list">
-                  {runs.length ? (
-                    runs.map((item) => (
-                      <article className="trace-card" key={item.run_id}>
-                        <header>
-                          <div>
-                            <b>{item.product_spec?.product_name ?? item.run_id.slice(0, 8)}</b>
-                            <small>
-                              {statusText[item.status] ?? stageText[item.stage] ?? item.stage} ·{' '}
-                              {item.run_id.slice(0, 8)}
-                            </small>
-                          </div>
-                          {item.artifact_paths && (
-                            <a href={API + '/runs/' + item.run_id + '/artifact/trace'}>
-                              下载 Trace JSON
-                            </a>
-                          )}
-                        </header>
-                        <div className="trace-timeline">
-                          {item.trace?.map((event, index) => (
-                            <div className="trace-entry" key={event.stage + '-' + index}>
-                              <span className={'trace-mark ' + event.status}>
-                                {event.status === 'completed' || event.status === 'passed'
-                                  ? '✓'
-                                  : '·'}
-                              </span>
-                              <div>
-                                <b>{event.summary}</b>
-                                <small>
-                                  {event.agent_id
-                                    ? `${agentNames[event.agent_id] ?? event.agent_id} · `
-                                    : ''}
-                                  {stageText[event.stage] ?? event.stage}
-                                  {event.at
-                                    ? ' · ' + new Date(event.at).toLocaleString('zh-CN')
-                                    : ''}
-                                  {event.estimated_cost_cny !== undefined
-                                    ? ' · 约 ¥' + event.estimated_cost_cny.toFixed(4)
-                                    : ''}
-                                </small>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        {item.artifact_paths && (
-                          <div className="artifact-links">
-                            <a href={API + '/runs/' + item.run_id + '/download'}>源码 ZIP</a>
-                            <a href={API + '/runs/' + item.run_id + '/artifact/report'}>交付报告</a>
-                            <a href={API + '/runs/' + item.run_id + '/artifact/git_diff'}>
-                              Git diff
-                            </a>
-                          </div>
-                        )}
-                      </article>
-                    ))
-                  ) : (
-                    <div className="empty-history">运行任务后，这里会显示完整阶段 Trace。</div>
-                  )}
-                </div>
+                <RunHistory runs={runs} />
               )}
             </section>
           )}

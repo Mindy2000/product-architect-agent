@@ -47,6 +47,20 @@ class ChangeArgs(Arguments):
     changes: list[project.FileChange] = Field(min_length=1, max_length=256)
 
 
+class PatchArgs(Arguments):
+    path: str = Field(min_length=1, max_length=180)
+    expected_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    before: str = Field(min_length=1, max_length=65536)
+    after: str = Field(max_length=65536)
+
+
+def _patch_file(context, args: PatchArgs):
+    change = project.FileChange(operation='patch', path=args.path,
+        expected_sha256=args.expected_sha256,
+        edits=[project.TextEdit(before=args.before, after=args.after)])
+    return project.apply_changes(context.run_id, [change], context.operation_id)
+
+
 class RestoreArgs(Arguments):
     commit: str = Field(pattern=r'^[0-9a-f]{40}$')
 
@@ -184,11 +198,13 @@ def _test(context, args):
     health_content=page_health.script(context.run_id)
     runner._write_file(runner.workspace_for(context.run_id),'tests/standard/health.spec.ts',health_content)
     result = runner.run_phase(context.run_id, 'acceptance' if profile != 'generated' else 'test', timeout=120, image_id=environment['image_id'])
-    health = runner.run_phase(context.run_id,'health',timeout=60, image_id=environment['image_id'])
+    # The protected suite also contains explicitly recognized interface contracts.
+    # Its existing fingerprint binds cache/replay/reviewer evidence to those clauses.
+    health = runner.run_phase(context.run_id,'health',timeout=90, image_id=environment['image_id'])
     project.sources(context.run_id)
     if (runner.workspace_for(context.run_id)/'tests/standard/health.spec.ts').read_text()!=health_content:raise project.ProjectError('固定基础检查文件被更改，结果未采纳。')
     runtime_identity.unchanged(context.run_id,environment)
-    return {'environment_sha256':environment['digest'],'digest':digest,'profile':profile,'suite_sha256':expected_suite,'health_sha256':health_hash(context.run_id),'coverage':page_health.coverage(context.run_id),'health_passed':health.exit_code==0,'evidence_kind':'generated' if profile=='generated' else 'independent_suite','requirements_confirmed':False,'passed':result.exit_code == 0 and health.exit_code==0,'exit_code':result.exit_code or health.exit_code,'output':result.output+'\n固定页面基础检查（不代表需求验收）：\n'+health.output,'duration_seconds':result.duration_seconds+health.duration_seconds}
+    return {'environment_sha256':environment['digest'],'digest':digest,'profile':profile,'suite_sha256':expected_suite,'health_sha256':health_hash(context.run_id),'coverage':page_health.coverage(context.run_id),'health_passed':health.exit_code==0,'evidence_kind':'generated' if profile=='generated' else 'independent_suite','requirements_confirmed':False,'passed':result.exit_code == 0 and health.exit_code==0,'exit_code':result.exit_code or health.exit_code,'output':result.output+'\n固定页面与已识别控件检查（不代表全部需求验收）：\n'+health.output,'duration_seconds':result.duration_seconds+health.duration_seconds}
 
 
 def _snapshot(context, args):
@@ -260,6 +276,7 @@ TOOLS = {
         ToolSpec('project.list_files','列出当前项目受控文件、SHA256和只读框架配置。',EmptyArgs,_list,10,True),
         ToolSpec('project.read_file','按路径读取当前项目文件片段，返回SHA256用于增量修改。',ReadArgs,_read,10,True),
         ToolSpec('project.apply_changes','创建、唯一文本补丁、替换或删除文件；编辑已有文件必须带最新SHA256。整批变更带恢复日志和自动Git快照。',ChangeArgs,_change,30,True),
+        ToolSpec('project.patch_file','一次仅替换一个文件中的唯一文本；path、expected_sha256、before、after为同层字段，继承路径、摘要与Git保护。',PatchArgs,_patch_file,30,True),
         ToolSpec('project.build','以固定依赖在禁网Docker容器中检查TypeScript并构建。',EmptyArgs,_build,150),
         ToolSpec('project.test','在禁网容器中执行用户选定的独立验收或生成测试。须先构建当前源码。',EmptyArgs,_test,180),
         ToolSpec('git.snapshot','保存当前项目的受控源码快照。',EmptyArgs,_snapshot,20,True),

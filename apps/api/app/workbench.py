@@ -9,6 +9,8 @@ from pydantic import BaseModel,ConfigDict,Field
 from . import runner,workbench_archive as archive,workbench_jobs as jobs
 from .process_control import run_bounded
 from .security_policy import redact
+from .backup_preflight import restore_effects
+from .text_models import QWEN_BASE, valid_qwen_base
 router=APIRouter(prefix='/api/v1/workbench')
 
 class MaintenanceMiddleware:
@@ -38,9 +40,12 @@ class MaintenanceMiddleware:
 class Contract(BaseModel):model_config=ConfigDict(extra='forbid')
 class Confirmation(Contract):token:uuid.UUID;confirmed:bool=False
 class SetupConfig(Contract):
- provider:str=Field(pattern=r'^(deepseek|qwen|dify)$')
+ provider:str=Field(pattern=r'^(deepseek|qwen|qwen_text|dify)$')
  api_key:str=Field(default='',max_length=1024)
  enabled:bool|None=None
+ reuse_vision_key:bool|None=None
+ base_url:str|None=Field(default=None,max_length=300)
+ model_name:str|None=Field(default=None,pattern=r'^(deepseek-flash|deepseek-v4-pro)$')
  budget_cny:float|None=Field(default=None,ge=.25,le=99,allow_inf_nan=False)
 
 
@@ -69,13 +74,15 @@ def local_command(args):
 
 def setup_status():
  values=config_values()
- try:budget=float(values.get('MODEL_BUDGET_CNY') or '99');budget_ok=0<budget<=99
+ try:
+  budget=float(values.get('MODEL_BUDGET_CNY') or '99');budget_ok=.25<=budget<=99
+  if not budget_ok:budget=99
  except (ValueError,TypeError):budget=99;budget_ok=False
  docker=bool(shutil.which('docker'));daemon=docker and local_command(['docker','--context',runner.DOCKER_CONTEXT,'info','--format','{{.ServerVersion}}'])
- checks=[{'id':'python','title':'Python 3.13','ready':platform.python_version_tuple()[:2]==('3','13'),'required':True,'help':'安装说明中的Python版本必须一致。'},
+ checks=[{'id':'source_parser','title':'源码精确候选分析（可选）','ready':bool(shutil.which('node')) and (root()/'node_modules/rolldown').is_dir(),'required':False,'help':'源码安装会准备此能力；缺失时仍可运行和查看文字候选，不会自动安装。'}, {'id':'python','title':'Python 3.13','ready':platform.python_version_tuple()[:2]==('3','13'),'required':True,'help':'请使用项目安装入口准备 Python 3.13，再重启工作台。版本不一致可能导致后端无法启动。'},
  {'id':'git','title':'本地版本管理','ready':bool(shutil.which('git')),'required':True,'help':'安装Git后重启工作台。'},
  {'id':'docker','title':'容器服务已启动','ready':daemon,'required':True,'help':'macOS使用Colima；Windows请启动Docker Desktop的Linux容器。'},
- {'id':'worker','title':'前端运行镜像','ready':daemon and runner.worker_image_available(),'required':True,'help':'使用安装入口的 --prepare-runtime 选项准备固定镜像；不会调用模型。'},
+ {'id':'worker','title':'前端运行镜像','ready':daemon and runner.worker_image_available(),'required':True,'help':'先启动容器服务，再使用安装入口准备运行环境；首次需要下载，后续可复用。高级选项为 --prepare-runtime，不会调用模型。'},
  {'id':'text_key','title':'文字模型密钥','ready':bool(values.get('MODEL_API_KEY')),'required':True,'help':'在下方填写自己的DeepSeek密钥，仅保存在本机。'},
  {'id':'budget','title':'累计费用上限','ready':budget_ok,'required':True,'help':'累计上限为0.25–99元，已有费用记录不会重置。'},
  {'id':'enabled','title':'文字模型调用许可','ready':str(values.get('MODEL_CALLS_ENABLED','false')).lower()=='true','required':True,'help':'明确允许调用后保存，再重启生效；向导不发起验证请求。'},
@@ -86,21 +93,39 @@ def setup_status():
  if receipt.is_file():
   try:completed=bool(json.loads(receipt.read_text()).get('setup_completed'))
   except (ValueError,AttributeError):pass
- from .model import _get_settings
+ from .model import _get_settings,SUPPORTED_MODELS
  loaded=_get_settings()
- return {'checks':checks,'ready':all(x['ready'] for x in checks if x['required']),'completed':completed,'budget_cny':budget,'disk_text_enabled':str(values.get('MODEL_CALLS_ENABLED','false')).lower()=='true','loaded_text_enabled':loaded['enabled'],'restart_required':loaded['enabled']!=(str(values.get('MODEL_CALLS_ENABLED','false')).lower()=='true') or loaded.get('api_key','')!=(values.get('MODEL_API_KEY') or '') or loaded.get('budget_cny')!=budget,'key_values_hidden':True,'provider_requests':0}
+ qwen_restart=any(str(values.get(k) or default).strip()!=str(os.getenv(k) or default).strip() for k,default in (('QWEN_TEXT_API_KEY',''),('QWEN_TEXT_BASE_URL',QWEN_BASE),('QWEN_TEXT_CALLS_ENABLED','false'),('QWEN_TEXT_USE_VISION_KEY','false')))
+ if str(values.get('QWEN_TEXT_USE_VISION_KEY','false')).lower()=='true':qwen_restart=qwen_restart or (values.get('VISION_API_KEY') or '')!=os.getenv('VISION_API_KEY','')
+ return {'checks':checks,'ready':all(x['ready'] for x in checks if x['required']),'completed':completed,'model_name':values.get('MODEL_NAME') or 'deepseek-flash','available_models':list(SUPPORTED_MODELS),'qwen_text':{'enabled':str(values.get('QWEN_TEXT_CALLS_ENABLED','false')).lower()=='true','reuse_vision_key':str(values.get('QWEN_TEXT_USE_VISION_KEY','false')).lower()=='true','base_url':values.get('QWEN_TEXT_BASE_URL') or QWEN_BASE},'service_keys':{'qwen_text':bool(values.get('VISION_API_KEY') if str(values.get('QWEN_TEXT_USE_VISION_KEY','false')).lower()=='true' else values.get('QWEN_TEXT_API_KEY')),'deepseek':bool(values.get('MODEL_API_KEY')),'qwen':bool(values.get('VISION_API_KEY')),'dify':bool(values.get('RAG_API_KEY'))},'credential_notice':'仅检测是否填写；未联网验证密钥有效性、模型权限或账户余额。','budget_cny':budget,'disk_text_enabled':str(values.get('MODEL_CALLS_ENABLED','false')).lower()=='true','loaded_text_enabled':loaded['enabled'],'restart_required':qwen_restart or loaded.get('model')!=(values.get('MODEL_NAME') or 'deepseek-flash') or loaded['enabled']!=(str(values.get('MODEL_CALLS_ENABLED','false')).lower()=='true') or loaded.get('api_key','')!=(values.get('MODEL_API_KEY') or '') or loaded.get('budget_cny')!=budget,'key_values_hidden':True,'provider_requests':0}
+
+@router.get('/evidence-policy')
+def evidence_policy():
+ from .evidence_policy import contract
+ return contract()
 
 @router.get('/setup')
 def setup():return setup_status()
 
 @router.post('/setup/config')
 def save_setup(payload:SetupConfig):
- values=config_values();key_name={'deepseek':'MODEL_API_KEY','qwen':'VISION_API_KEY','dify':'RAG_API_KEY'}[payload.provider];updates={}
+ values=config_values();key_name={'deepseek':'MODEL_API_KEY','qwen':'VISION_API_KEY','qwen_text':'QWEN_TEXT_API_KEY','dify':'RAG_API_KEY'}[payload.provider];updates={}
  if payload.api_key:
   if re.search(r'[\s\x00-\x1f\x7f"\'\\#]',payload.api_key):raise HTTPException(422,'密钥格式不正确，未保存。')
   updates[key_name]=payload.api_key
- if payload.provider!='deepseek' and (payload.enabled is not None or payload.budget_cny is not None):raise HTTPException(422,'此处仅配置可选服务密钥，不自动开启调用或改写其预算。')
+ if payload.provider not in {'deepseek','qwen_text'} and (payload.enabled is not None or payload.budget_cny is not None or payload.model_name is not None):raise HTTPException(422,'此处仅配置可选服务密钥，不自动开启调用或改写其预算。')
+ if payload.provider!='qwen_text' and (payload.reuse_vision_key is not None or payload.base_url is not None):raise HTTPException(422,'文字千问选项不能用于其他服务。')
+ if payload.provider=='qwen_text':
+  if payload.budget_cny is not None or payload.model_name is not None:raise HTTPException(422,'千问共用累计预算；本通道模型为qwen3.8-flash。')
+  base=(payload.base_url or values.get('QWEN_TEXT_BASE_URL') or QWEN_BASE).rstrip('/')
+  if not valid_qwen_base(base):raise HTTPException(422,'仅支持北京官方千问接口，未保存。')
+  reuse=payload.reuse_vision_key if payload.reuse_vision_key is not None else str(values.get('QWEN_TEXT_USE_VISION_KEY','false')).lower()=='true'
+  if reuse and not valid_qwen_base((values.get('VISION_BASE_URL') or QWEN_BASE).rstrip('/')):raise HTTPException(422,'现有视觉接口不是北京地域，请单独配置文字密钥。')
+  if payload.enabled and not (values.get('VISION_API_KEY') if reuse else payload.api_key or values.get(key_name)):raise HTTPException(422,'请先填写文字密钥或选择已填写的视觉密钥。')
+  updates.update(QWEN_TEXT_BASE_URL=base,QWEN_TEXT_USE_VISION_KEY=str(reuse).lower())
+  if payload.enabled is not None:updates['QWEN_TEXT_CALLS_ENABLED']=str(payload.enabled).lower()
  if payload.provider=='deepseek':
+  if payload.model_name is not None:updates['MODEL_NAME']=payload.model_name
   if payload.enabled is not None:
    if payload.enabled and not (payload.api_key or values.get(key_name)):raise HTTPException(422,'启用文字模型前请先填写密钥。')
    updates['MODEL_CALLS_ENABLED']='true' if payload.enabled else 'false'
@@ -162,7 +187,7 @@ async def preview_backup(request:Request):
     stream.write(chunk)
   manifest=await asyncio.to_thread(archive.inspect,path,archive.version(root()))
   # Raw paths may contain document names; preview shows only categories and totals.
-  return {'token':token,'version':manifest['app_version'],'file_count':len(manifest['files']),'bytes':sum(e['bytes'] for e in manifest['files']),'credentials_included':False,'compatible':True,'compatibility':manifest['compatibility'],'archive_sha256':archive.file_sha(path),'excluded':archive.EXCLUSIONS,'expires_in_seconds':86400,'message':'校验通过。恢复将创建独立工作台副本；原目录保留，新副本密钥为空、模型调用关闭。'}
+  return {'token':token,'version':manifest['app_version'],'file_count':len(manifest['files']),'bytes':sum(e['bytes'] for e in manifest['files']),'credentials_included':False,'compatible':True,'compatibility':manifest['compatibility'],'effects':restore_effects(manifest),'archive_sha256':archive.file_sha(path),'excluded':archive.EXCLUSIONS,'expires_in_seconds':86400,'message':'校验通过。恢复将创建独立工作台副本；原目录保留，新副本密钥为空、模型调用关闭。'}
  except BaseException:path.unlink(missing_ok=True);raise
 
 @router.get('/backups/previews')
@@ -180,7 +205,7 @@ def recheck_backup(token:uuid.UUID):
  path=archive.safe_path(root(),'data/workbench/incoming/'+str(token)+'.zip')
  if not path.is_file() or time.time()-path.stat().st_mtime>86400:raise HTTPException(409,'预览已过期，请移除暂存并重新选择备份。')
  manifest=archive.inspect(path,archive.version(root()))
- return {'token':str(token),'version':manifest['app_version'],'file_count':len(manifest['files']),'bytes':sum(e['bytes'] for e in manifest['files']),'compatible':True,'compatibility':manifest['compatibility'],'archive_sha256':archive.file_sha(path),'credentials_included':False,'message':'校验通过。恢复将创建独立工作台副本；原目录保留，新副本密钥为空、模型调用关闭。'}
+ return {'token':str(token),'version':manifest['app_version'],'file_count':len(manifest['files']),'bytes':sum(e['bytes'] for e in manifest['files']),'compatible':True,'compatibility':manifest['compatibility'],'effects':restore_effects(manifest),'archive_sha256':archive.file_sha(path),'credentials_included':False,'message':'校验通过。恢复将创建独立工作台副本；原目录保留，新副本密钥为空、模型调用关闭。'}
 
 @router.delete('/backups/preview/{token}')
 def discard_preview(token:uuid.UUID):

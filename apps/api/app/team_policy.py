@@ -11,8 +11,22 @@ def enabled(state):
 
 def reserve(state):
     total = max(0, float(state.get('run_budget_cny', 5)))
-    minimum = 1.05 if state.get('model_name') == 'deepseek-v4-pro' else .75
-    return {'steps': 3, 'estimated_cny': round(min(total, max(minimum, total * .2)), 6)}
+    from .text_models import role_model, MODELS
+    minimum = 3 * MODELS.get(role_model(state,'reviewer'),MODELS['deepseek-flash'])['minimum']
+    from .action_protocol import enabled as bounded
+    steps = min(8, max(0, int(state.get('execution_step_limit',40)))) if bounded(state) else 3
+    return {'steps': steps, 'estimated_cny': round(min(total, max(minimum, total * .2)), 6)}
+
+
+def step_budget(state, used, role, role_limit=None):
+    remaining = max(0, int(state.get('execution_step_limit',40)) - used)
+    protected = reserve(state)['steps'] if enabled(state) else 0
+    available = max(0, remaining - protected) if role in ('planner','developer') else remaining
+    if role_limit is not None:
+        available = min(available, max(0, role_limit - state.get('specialist_turn',0)))
+    return {'shared_remaining':remaining, 'role_remaining':available,
+            'reserved_review_steps':protected, 'last_step':available == 1,
+            'notice':'剩余步数含本次调用；最后一步只提交有证据的结论或明确停止。总预算和总步数不增加。'}
 
 
 def protect_stage(state, stage):

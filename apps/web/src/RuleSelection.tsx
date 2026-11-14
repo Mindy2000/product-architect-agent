@@ -6,6 +6,15 @@ export type RuleChoice = {
   feature: string[]
   task: string[]
 }
+type Warning = {
+  message: string
+  key?: string
+  titles?: string[]
+  values?: string[]
+  scope?: string
+  priorities?: number[]
+  resolution?: string
+}
 type Rule = { id: string; title: string; content: string; scope_type?: string; targets?: string[] }
 export default function RuleSelection({
   runId,
@@ -21,12 +30,18 @@ export default function RuleSelection({
       task: [],
     }),
     [items, setItems] = useState<Rule[]>([]),
-    [warnings, setWarnings] = useState<{ message: string; key?: string }[]>([]),
+    [warnings, setWarnings] = useState<Warning[]>([]),
     [error, setError] = useState('')
+  const [revision, setRevision] = useState(0)
+  useEffect(() => {
+    const changed = () => setRevision((v) => v + 1)
+    window.addEventListener('project-rules-changed', changed)
+    return () => window.removeEventListener('project-rules-changed', changed)
+  }, [])
   const encoded = JSON.stringify(selection)
   useEffect(() => {
     let gone = false
-    apiJson<{ items: Rule[]; warnings: { message: string; key?: string }[] }>(
+    apiJson<{ items: Rule[]; warnings: Warning[] }>(
       '/collaboration/projects/' + runId + '/rules/selection',
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: encoded },
     )
@@ -43,7 +58,7 @@ export default function RuleSelection({
     return () => {
       gone = true
     }
-  }, [runId, encoded])
+  }, [runId, encoded, revision])
   function update(v: RuleChoice) {
     setSelection(v)
     onChange(v)
@@ -52,7 +67,7 @@ export default function RuleSelection({
     <details className="expansion-panel">
       <summary>本次修改适用规则</summary>
       <p>
-        默认仅应用项目通用规则。填写精确范围标记后选择页面、功能或任务规则；冻结后不会随长期规则改变。只提示明确键值冲突，自由文本需人工核对。
+        默认仅应用项目通用规则。填写精确范围标记后选择页面、功能或任务规则；冻结后不会随长期规则改变。检查所选范围的重叠与键值差异；优先级只提示，不自动覆盖，自由文本需人工核对。
       </p>
       {(['page', 'feature', 'task'] as const).map((k) => (
         <label key={k}>
@@ -88,7 +103,10 @@ export default function RuleSelection({
       ))}
       {warnings.map((w, i) => (
         <p className="inline-state error" key={i}>
-          {w.message} {w.key}
+          {w.titles?.join(' ↔ ')}：{w.message} {w.key} {w.values?.join(' ↔ ')}
+          <small>
+            {w.scope} · 优先级 {w.priorities?.join(' / ')}。{w.resolution}
+          </small>
         </p>
       ))}
       {error && <p className="inline-state error">{error}</p>}

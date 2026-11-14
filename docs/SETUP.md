@@ -1,6 +1,6 @@
 # 安装与本机运行
 
-支持目标：macOS（Apple Silicon优先）和Windows x64。当前Mac有实际运行证据；Windows构建与API启动由GitHub Actions另行核对，Docker Desktop/WSL2完整交互仍需要Windows设备验收。
+支持目标：macOS（Apple Silicon优先）和Windows x64。当前Mac有实际运行证据；Windows保留构建配方，完整运行未验收且不在本轮范围，不据此宣称已验收支持。
 
 ## 基础工具
 
@@ -36,6 +36,14 @@ Windows把`python3.13`换成`py -3.13`。配置入口使用隐藏输入，不把
 - 提前准备运行镜像：`scripts/manage.py install --prepare-runtime`。macOS按需启动Colima；Windows需先启动Docker Desktop。会下载数GB镜像，保留足够磁盘；不需要每次运行。
 - Docker context默认macOS为`colima`、Windows为`default`。Docker Desktop使用其他context时，可在本地.env设置`PA_DOCKER_CONTEXT=desktop-linux`。
 - Dify、千问为可选配置；核心路径不依赖RAG。不自动上传资料、安装外部MCP或调用模型。
+
+## 可选千问文字和角色模型
+
+在“本机设置→配置服务”选择“千问·可选文字生成与审查”。本轮支持北京 `qwen3.8-flash`，接口默认为 `https://dashscope.aliyuncs.com/compatible-mode/v1`；北京业务空间专属官方域名也可填写。可单独填文字Key，或显式勾选复用已填的北京视觉Key。保存不发起验证；模型权限和费用以当前账户为准。
+
+对应环境变量：`QWEN_TEXT_API_KEY`、`QWEN_TEXT_USE_VISION_KEY`、`QWEN_TEXT_BASE_URL`、`QWEN_TEXT_CALLS_ENABLED`。复用和调用两个开关默认false，独立于视觉许可；文字千问还需要 `MODEL_CALLS_ENABLED=true` 总许可。许可修改后重启。保持原单任务与累计费用上限；不假定免费、不自动重试、不切换备用供应商。
+
+创建方案前展开“三个智能体的文字模型”，分别选规划/开发/审查模型；空项沿用任务默认模型。方案和模板保存这些选择，确认开发后冻结，不改写已有任务。设置页默认文字模型仍配置DeepSeek，新任务上方可选择千问；使用不同模型不代表已证明审查效果改善。
 
 ## 排错
 

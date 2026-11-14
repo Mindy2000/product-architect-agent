@@ -39,7 +39,7 @@ try:
   if server.started:break
   time.sleep(.1)
  with sync_playwright() as p:
-  browser=p.chromium.launch(headless=True)
+  browser=p.chromium.launch(headless=True,channel=os.environ.get('PA_UI_BROWSER_CHANNEL') or None)
   try:
    page=browser.new_page(viewport={'width':1440,'height':1000},accept_downloads=True)
    page.on('pageerror',lambda e:report['page_errors'].append(str(e)));page.on('console',lambda m:report['console_errors'].append(m.text) if m.type=='error' else None)

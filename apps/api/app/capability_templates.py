@@ -1,4 +1,5 @@
 """Reviewed local source bundles; choosing a template never invokes a model."""
+from typing import Literal
 import hashlib,json,uuid
 from fastapi import APIRouter,HTTPException
 from pydantic import BaseModel,ConfigDict,Field
@@ -23,7 +24,8 @@ def catalog():
 
 class DraftInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    model_name:str=Field(default='deepseek-flash',pattern=r'^(deepseek-flash|deepseek-v4-pro)$')
+    model_name:designs.TextModel='deepseek-flash'
+    role_models:dict[Literal['planner','developer','reviewer'],designs.TextModel]=Field(default_factory=dict,max_length=3)
     run_budget_cny:float=Field(default=5,ge=.25,le=20)
     execution_step_limit:int=Field(default=40,ge=8,le=64)
 

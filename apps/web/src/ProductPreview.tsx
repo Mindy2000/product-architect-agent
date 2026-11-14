@@ -3,7 +3,13 @@ import VisualSettings from './VisualSettings'
 import PreviewFeedback, { type Selection } from './PreviewFeedback'
 import { useEffect, useState, useRef } from 'react'
 const API = API_BASE
-type Frame = { image: string; width: number; height: number; selection?: Selection | null }
+type Frame = {
+  image: string
+  width: number
+  height: number
+  selection?: Selection | null
+  visual_settings?: { enabled: boolean; viewport: string }
+}
 export default function ProductPreview({
   runId,
   staticPreview,
@@ -85,6 +91,7 @@ export default function ProductPreview({
       ) : (
         <>
           <VisualSettings
+            frame={frame}
             busy={busy}
             apply={(visual) => send('action', { action: 'configure', visual })}
           />

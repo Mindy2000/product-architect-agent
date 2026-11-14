@@ -31,7 +31,9 @@ def vision_adapter() -> VisionAdapter:
 
 def catalog():
     from .vision import status
-    return {'text': {'provider': 'deepseek', 'models': list(SUPPORTED_MODELS), 'integrated': True},
+    from .text_models import catalog as text_catalog
+    from .model import _get_settings
+    return {'text': {'providers': ['deepseek','aliyun_text'], 'models': list(SUPPORTED_MODELS), 'routes':text_catalog(_get_settings()), 'integrated': True},
             'vision_understanding': {**status(), 'uploads_enabled': True},
             'image_generation': {'integrated': False, 'status': 'out_of_scope'},
             'automatic_provider_fallback': False}

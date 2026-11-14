@@ -52,3 +52,8 @@
 界面新增责任分配、预留规则与问题复查记录；源码ZIP的AGENT_TEAM.json包含plan_coverage、review_issues、review_history和停止原因。历史文档中的七组验证是0.4.0记录，当前离线流程为八组。真实模型、Windows完整运行和正式Release继续暂缓。
 
 本轮本地验证：241项Python回归、10项前端专项检查、类型/格式/构建及八组离线流程通过；新增第八组包含上述五个协作场景。最终证据保存在本机outputs/team-closeout-offline与outputs/team-closeout-summary.json。所有响应为固定合成数据，真实模型/视觉/Dify调用为零；这不证明真实模型自主完成率，也不代表Windows完整运行验收。
+
+
+## 2026-11-14 协议修复更新
+
+上文3步审查预留适用于旧任务。新确认开发任务冻结agent_protocol_version=1，在原总步数内预留8步审查，费用预留公式与总限额不变；增加角色动作Schema、具体未读文件反馈及剩余步骤/无进展提示。完整范围、345项回归及固定响应流程证据见[当前状态汇总](PROJECT_STATUS.md)。没有新的付费验证，不能用离线通过覆盖真实任务失败记录。

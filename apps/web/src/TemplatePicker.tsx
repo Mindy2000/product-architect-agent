@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiJson } from './api'
+import type { RoleModels } from './RoleModels'
 type Template = {
   name?: string
   custom?: boolean
@@ -10,12 +11,14 @@ type Template = {
 export default function TemplatePicker({
   onSelect,
   model,
+  roleModels = {},
   budget,
   steps,
   disabled,
 }: {
   onSelect: (id: string) => void
   model: string
+  roleModels?: RoleModels
   budget: number
   steps: number
   disabled: boolean
@@ -69,6 +72,7 @@ export default function TemplatePicker({
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                       model_name: model,
+                      role_models: roleModels,
                       run_budget_cny: budget,
                       execution_step_limit: steps,
                     }),

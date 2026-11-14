@@ -38,8 +38,12 @@ export default function TeamPanel({ run }: { run: RunRecord }) {
         </span>
       </div>
       <p className="team-note">
-        按任务顺序协作，共用模型与费用上限。当前{running ? '执行' : '停留'}：
+        按任务顺序协作，可分别选模型，共用费用与步骤上限。当前{running ? '执行' : '停留'}：
         {agentNames[run.active_agent ?? 'coordinator']}
+      </p>
+      <p className="team-note">
+        默认文字模型：{run.model_name || '未登记'}
+        。角色分别读取上下文并按不同权限工作；不同模型仍可能存在共同偏差，审查不代替逐条需求确认。
       </p>
       {run.review_reserve && (
         <p className="team-note">
@@ -80,6 +84,7 @@ export default function TeamPanel({ run }: { run: RunRecord }) {
               {running && run.active_agent === role.id ? ' · 进行中' : ''}
             </strong>
             <p>{role.duty}</p>
+            <p>文字模型：{run.role_models?.[role.id] || run.model_name || '未登记'}</p>
             <small>{role.permission}</small>
           </article>
         ))}

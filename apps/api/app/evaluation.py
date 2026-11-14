@@ -7,6 +7,23 @@ from .process_control import run_bounded
 from .platform_support import WindowsJob,kill_process_group
 router=APIRouter(prefix='/api/v1/evaluations')
 
+@router.get('/real-protocol')
+def real_protocol():
+    from .real_evaluation import protocol
+    return protocol()
+
+@router.get('/real-template')
+def real_template():
+    from fastapi.responses import JSONResponse
+    from .real_evaluation import result_template
+    return JSONResponse(result_template(), headers={'Content-Disposition':'attachment; filename="real-evaluation-template.json"'})
+
+@router.post('/real-assessment')
+def real_assessment(payload:dict):
+    from .real_evaluation import assess
+    try:return assess(payload)
+    except (ValueError,TypeError,KeyError):raise HTTPException(422,'评测记录不符合协议；请核对用例、次数、检查结果和数值。') from None
+
 @router.get('')
 def summary():
     from .model import budget_status

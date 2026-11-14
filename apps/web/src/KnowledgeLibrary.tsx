@@ -38,6 +38,16 @@ export type KnowledgeSource = {
   collection_id: string
   source: { source_id: string; title: string; location?: string; uri?: string }
 }
+type Quality = {
+  document_sha256: string
+  sampled_chunks: number
+  total_chunks: number
+  sample_complete: boolean
+  warnings: string[]
+  parse_warnings: string[]
+  duplicate_documents: { id: string; filename: string }[]
+  notice: string
+}
 type SearchResult = {
   retrieval_id: string
   message: string
@@ -107,9 +117,12 @@ export default function KnowledgeLibrary({
     [notice, setNotice] = useState(''),
     [query, setQuery] = useState(''),
     [result, setResult] = useState<SearchResult | null>(null),
-    [preview, setPreview] = useState<{ document: Document; items: Chunk[]; offset: number } | null>(
-      null,
-    )
+    [preview, setPreview] = useState<{
+      document: Document
+      items: Chunk[]
+      offset: number
+      quality?: Quality
+    } | null>(null)
   async function loadCollections() {
     const data = await payload(await apiFetch(API + '/collections'))
     setCollections(data.items)
@@ -525,6 +538,28 @@ export default function KnowledgeLibrary({
           <button type="button" onClick={() => setPreview(null)}>
             关闭
           </button>
+          {preview.quality && (
+            <details>
+              <summary>文档质量与版本检查</summary>
+              <p>{preview.quality.notice}</p>
+              <p>
+                检查 {preview.quality.sampled_chunks}/{preview.quality.total_chunks} 段
+                {preview.quality.sample_complete ? '（全部）' : '（抽样，最多200段）'}。
+              </p>
+              <small>文档指纹：{preview.quality.document_sha256}</small>
+              <ul>
+                {[...preview.quality.parse_warnings, ...preview.quality.warnings].map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+              <p>
+                相同文件：
+                {preview.quality.duplicate_documents.map((d) => d.filename).join('、') ||
+                  '未发现同指纹资料'}
+                。没有提示不等于资料质量已通过。
+              </p>
+            </details>
+          )}
           {preview.items.map((chunk) => (
             <article key={chunk.id}>
               <small>
@@ -593,6 +628,7 @@ export default function KnowledgeLibrary({
           <b>
             相关片段 · {result.chunks.length} 条 · {result.duration_ms}ms
           </b>
+          <p>{result.message}</p>
           <small>检索记录 {result.retrieval_id.slice(0, 8)}</small>
           {result.chunks.map((item) => (
             <article key={item.chunk_id}>

@@ -12,6 +12,7 @@ type Status = {
   free_confirmed_at?: string
   paused?: string
   calls_last_24h: number
+  last_error?: { http_status: number; code: string; message: string } | null
   collections: { id: string; name: string }[]
   documents: { dataset_id: string; name: string; status: string }[]
 }
@@ -123,6 +124,12 @@ export default function DifyKnowledge({
             ，保留额度 {status.reserved_credits}，可用保护空间 {status.local_remaining_credits}
             。这些不是平台实时余额。
           </small>
+          {status.last_error && (
+            <p role="status">
+              最近远程请求未完成（HTTP {status.last_error.http_status}，{status.last_error.code}）：
+              {status.last_error.message} 查看此记录不发起远程请求。
+            </p>
+          )}
           <details open={!status.free_confirmed_at}>
             <summary>确认本机免费策略（不联网）</summary>
             <p>

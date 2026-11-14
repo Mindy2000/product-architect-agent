@@ -13,7 +13,7 @@ type Note = {
   candidates: string[]
   status?: string
   association?: {
-    locations: { path: string; line: number; confidence: string }[]
+    locations: { path: string; line: number; confidence: string; component?: string }[]
     notice: string
     uncertain: boolean
   }
@@ -144,10 +144,10 @@ export default function PreviewFeedback({
           </label>
           {n.association && (
             <details>
-              <summary>源码关联 · {n.association.uncertain ? '待核对候选' : '显式标记'}</summary>
+              <summary>源码关联 · {n.association.uncertain ? '待核对候选' : '已核对标记'}</summary>
               {n.association.locations.map((v, i) => (
                 <p key={i}>
-                  {v.path}:{v.line} · {v.confidence}
+                  {v.path}:{v.line} {v.component ? '· 组件 ' + v.component : ''} · {v.confidence}
                 </p>
               ))}
               <small>{n.association.notice}</small>

@@ -23,6 +23,8 @@ def diagnosis_prompt(application_type: str) -> str:
 
 
 class RunState(TypedDict, total=False):
+    agent_protocol_version: int
+    specialist_feedback_details: dict
     collaboration_version: int
     project_rules: list[dict]
     selected_annotations: list[dict]
@@ -74,6 +76,8 @@ class RunState(TypedDict, total=False):
     last_tool_result: dict | None
     run_id: str
     user_request: str
+    role_models: dict
+    review_context_version: int
     model_name: str
     acceptance_profile: str
     parent_run_id: str
@@ -160,7 +164,7 @@ def build_graph(checkpoint_path: Path | None = None):
         initialize_workspace(state['run_id'],state.get('parent_run_id'),application_type=state['product_spec'].get('application_type','frontend'),crud_schema=state['product_spec'].get('crud_schema'))
         from .capability_templates import seed
         seed(state)
-        return _commit(state,{'stage':'planning','active_agent':'planner','specialist_turn':0,'specialist_feedback':'',
+        return _commit(state,{'stage':'planning','active_agent':'planner','specialist_turn':0,'specialist_feedback':'','specialist_feedback_details':{},
             'agent_handoffs':team.handoff(state,'coordinator','planner','按用户冻结方案规划；不增删验收标准。')})
 
     def specialist(state: RunState, role: str) -> dict:
@@ -174,12 +178,23 @@ def build_graph(checkpoint_path: Path | None = None):
                 'trace':state.get('trace',[])+[_event(state,stage,'stopped',str(error),agent_id=role)]})
         except (SandboxError,ModelOutputInvalid) as error:
             turn=state.get('specialist_turn',0)+1
+            from .action_protocol import closeout_repair
+            final_rejection=(role=='reviewer' and closeout_repair(state) and
+                             (turn>=team.role_limit(state,role) or team.count(state['run_id'])>=state.get('execution_step_limit',40)))
+            details=getattr(error,'details',{})
+            if role=='reviewer' and closeout_repair(state) and isinstance(error,ModelOutputInvalid):
+                from .review_context import format_feedback
+                remaining=min(team.role_limit(state,role)-turn,state.get('execution_step_limit',40)-team.count(state['run_id']))
+                details=format_feedback(remaining)
             return _commit(state,{'stage':stage,'specialist_action':'tool','specialist_turn':turn,'specialist_feedback':str(error)[:1200],
+                'specialist_feedback_details':details,
+                **({'specialist_action':'stop','review_status':'stopped','validation_ok':False,
+                    'last_error':'审查最后提交未通过，已停止且不追加调用：'+str(error)[:1200]} if final_rejection else {}),
                 'team_steps':team.count(state['run_id']),'trace':state.get('trace',[])+[_event(state,stage,'rejected',str(error)[:1200],agent_id=role)]})
         decision=value['decision'];usage=dict(value['usage'])
         if usage.get('replayed'):usage['estimated_cost_cny']=0
         updates={'stage':stage,'active_agent':role,'specialist_action':decision['action'],'specialist_turn':value['turn'],
-                 'specialist_feedback':value['feedback'],'team_steps':team.count(state['run_id'])}
+                 'specialist_feedback':value['feedback'],'specialist_feedback_details':{},'team_steps':team.count(state['run_id'])}
         event=_event(state,stage,'running' if decision['action']=='tool' else 'completed',decision['summary'],tool=decision.get('tool'),**usage)
         if value['tool_result'] is not None:
             receipt=value['tool_result'];event['tool_ok']=receipt.get('ok')
@@ -192,7 +207,10 @@ def build_graph(checkpoint_path: Path | None = None):
         elif decision['action']=='submit' and role=='planner':
             steps=decision['plan']['steps'];updates.update(plan=[x['title'] for x in steps],plan_details=steps)
             if team.team_policy.enabled(state):
-                updates['plan_coverage']=team.team_policy.coverage(state,PlanResult.model_validate(decision['plan']),decision.get('coverage_exceptions',[]))
+                from .model import FocusedPlanResult
+                from .action_protocol import closeout_repair
+                plan_schema=FocusedPlanResult if closeout_repair(state) else PlanResult
+                updates['plan_coverage']=team.team_policy.coverage(state,plan_schema.model_validate(decision['plan']),decision.get('coverage_exceptions',[]))
         elif decision['action']=='submit':
             report=decision['review']
             if team.team_policy.enabled(state):
@@ -215,7 +233,7 @@ def build_graph(checkpoint_path: Path | None = None):
             reason='修复后源码、运行环境与技术证据没有变化，停止重复审查，保留未解决问题。'
             return _commit(state,{'specialist_action':'stop','review_status':'stopped','review_stop_reason':reason,'last_error':reason,'validation_ok':False,
                 'trace':state.get('trace',[])+[_event(state,'review','stopped',reason)]})
-        return _commit(state,{'specialist_action':'tool','stage':'review','active_agent':'reviewer','specialist_turn':0,'specialist_feedback':'',
+        return _commit(state,{'specialist_action':'tool','stage':'review','active_agent':'reviewer','specialist_turn':0,'specialist_feedback':'','specialist_feedback_details':{},
             'review_status':'in_progress','validation_ok':False,'agent_handoffs':team.handoff(state,'developer','reviewer','独立核对当前源码、逐条要求与技术证据，不代写人工验收。')})
     def after_reviewer(state):
         if state.get('specialist_action')=='tool':return 'reviewer_agent'

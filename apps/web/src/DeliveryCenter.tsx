@@ -1,3 +1,5 @@
+import EvidenceGuide from './EvidenceGuide'
+import { statusText } from './runPresentation'
 import { API_BASE, apiFetch } from './api'
 import { useEffect, useState } from 'react'
 import Versions from './Versions'
@@ -27,18 +29,6 @@ const labels: Record<string, string> = {
   git_diff: 'Git diff',
   manifest: '文件清单',
   preview: '页面预览',
-}
-const statusText: Record<string, string> = {
-  completed: '执行完成',
-  failed_validation: '交付完成，技术检查未通过',
-  failed: '运行失败',
-  failed_model: '模型调用失败',
-  failed_sandbox: '执行环境失败',
-  blocked_budget: '预算不足',
-  blocked_configuration: '配置待完成',
-  interrupted: '服务中断',
-  paused: '已暂停',
-  cancelled: '已取消',
 }
 export default function DeliveryCenter({ runId }: { runId: string }) {
   const [data, setData] = useState<Lineage | null>(null),
@@ -105,6 +95,7 @@ export default function DeliveryCenter({ runId }: { runId: string }) {
   return (
     <details className="delivery-center" open>
       <summary>交付与版本管理</summary>
+      <EvidenceGuide />
       <p>
         按项目版本查看交付资料与父子关系。恢复旧版本会创建独立的暂停副本，保留已有项目；手动继续后才会重新构建和验收。
       </p>

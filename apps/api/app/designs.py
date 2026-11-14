@@ -46,11 +46,14 @@ class ProductDesign(ProductSpec):
         return self
 
 
+from .text_models import TextModel
+
 class DesignRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     application_type: Literal['frontend','fullstack_crud'] = 'frontend'
     request: str = Field(min_length=10,max_length=5000)
-    model_name: Literal['deepseek-flash','deepseek-v4-pro'] = 'deepseek-flash'
+    model_name: TextModel = 'deepseek-flash'
+    role_models: dict[Literal['planner','developer','reviewer'],TextModel] = Field(default_factory=dict,max_length=3)
     parent_run_id: uuid.UUID | None = None
     rule_selection: RuleSelection = Field(default_factory=RuleSelection)
     annotation_ids: list[uuid.UUID] = Field(default_factory=list,max_length=8)

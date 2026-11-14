@@ -1,3 +1,4 @@
+import RealEvaluationPlan from './RealEvaluationPlan'
 import { useEffect, useState } from 'react'
 import { apiJson } from './api'
 import MaintenanceJob, { startLocalJob } from './MaintenanceJob'
@@ -79,6 +80,7 @@ export default function EvaluationCenter() {
   return (
     <section className="expansion-panel">
       <h2>质量与成本评测</h2>
+      <RealEvaluationPlan />
       <p>{data?.notice || '固定响应评测不调用付费模型。'}</p>
       <p>
         离线套件：任务管理、报名表单、仪表盘。比较40步标准策略与8步限额策略；另含坏参数、过期证据、澄清中断、规则冲突和无进展修复五项故障注入。使用独立副本顺序构建和测试，请先关闭预览并暂停开发。

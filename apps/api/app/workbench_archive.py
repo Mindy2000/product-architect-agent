@@ -57,7 +57,7 @@ def allowed(name):
  if len(parts)>=3 and parts[0]=='generated-projects' and re.fullmatch(UUID_RE,parts[1]):return True
  return len(parts)==2 and parts[0]=='outputs' and re.match(UUID_RE+r'-',parts[1]) is not None
 
-def walk(root):
+def walk(root, enforce_limits=True):
  selected={}
  bases=[root/'data'/name for name in DATABASES]+[root/'data'/name for name in DATA_DIRS]+[root/'data/workbench/preferences.json',root/'generated-projects',root/'outputs']
  for base in bases:
@@ -78,9 +78,10 @@ def walk(root):
    safe_path(root,rel)
    info=path.stat()
    if not stat.S_ISREG(info.st_mode) or info.st_nlink>1:raise ArchiveError('备份文件必须是普通独立文件。')
-   if info.st_size>MAX_FILE:raise ArchiveError('备份单文件超过128MiB，请先拆分资料。')
+   if enforce_limits and info.st_size>MAX_FILE:raise ArchiveError('备份单文件超过128MiB，请先拆分资料。')
    selected[rel]=(info.st_size,info.st_mtime_ns)
- if len(selected)>MAX_ENTRIES or sum(v[0] for v in selected.values())>LIMIT:raise ArchiveError('工作台备份超过512MiB或30,000文件上限。')
+   if len(selected)>100000:raise ArchiveError('文件数量超过预检扫描上限100,000；请分开管理项目资料，未修改原数据。')
+ if enforce_limits and (len(selected)>MAX_ENTRIES or sum(v[0] for v in selected.values())>LIMIT):raise ArchiveError('工作台备份超过512MiB或30,000文件上限。')
  return selected
 
 def sqlite_path(root,relative):
@@ -114,11 +115,11 @@ def settings(root):
  return {k:v for k,v in values.items() if k in permitted and isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9._-]{1,80}',v)}
 
 def plan(root):
- files=walk(root);groups={}
- for name,(size,_) in files.items():
-  group='/'.join(name.split('/')[:2]) if name.startswith('data/') else name.split('/')[0]
-  value=groups.setdefault(group,{'files':0,'bytes':0});value['files']+=1;value['bytes']+=size
- return {'file_count':len(files),'bytes':sum(v[0] for v in files.values()),'groups':[{'name':k,**v} for k,v in sorted(groups.items())],'excluded':EXCLUSIONS,'credentials_included':False,'format':1,'max_bytes':LIMIT,'warning':'备份包含项目、文档正文和业务资料，请私下保管；不会上传到任何平台。用户资料正文原样保留。'}
+ # Report capacity even when export is blocked; never expose document filenames.
+ files=walk(root,enforce_limits=False)
+ from .backup_preflight import summarize
+ return summarize(root,files,max_bytes=LIMIT,max_file=MAX_FILE,max_entries=MAX_ENTRIES,excluded=EXCLUSIONS)
+
 
 def create(root,destination,progress=None,cancelled=None):
  checkpoint(progress,cancelled,'准备快照');ensure_idle(root);before=walk(root);entries=[]
@@ -127,8 +128,10 @@ def create(root,destination,progress=None,cancelled=None):
  credentials=[str(v).encode() for k,v in values.items() if v and len(str(v))>=8 and re.search(r'(?:API_KEY|SECRET|TOKEN|PASSWORD)$',k,re.I)]
  if shutil.disk_usage(root).free<sum(v[0] for v in before.values())*2+128*1024**2:raise ArchiveError('磁盘空间不足以创建安全备份，请先整理空间。','disk_space')
  destination.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+ created=False
  try:
   with tempfile.TemporaryDirectory(dir=destination.parent) as temp,zipfile.ZipFile(destination,'x',zipfile.ZIP_DEFLATED) as archive:
+   created=True
    total=0
    for index,name in enumerate(sorted(before)):
     checkpoint(progress,cancelled,'备份文件',index,len(before))
@@ -153,7 +156,9 @@ def create(root,destination,progress=None,cancelled=None):
   inspect(destination,version(root),progress,cancelled);destination.chmod(0o600)
   checkpoint(progress,cancelled,'备份完成',1,1)
   return manifest
- except BaseException:destination.unlink(missing_ok=True);raise
+ except BaseException:
+  if created:destination.unlink(missing_ok=True)
+  raise
 
 def inspect(path,expected_version,progress=None,cancelled=None):
  if path.is_symlink() or path.stat().st_size>LIMIT:raise ArchiveError('备份文件异常或超过512MiB。')
@@ -240,7 +245,7 @@ def restore(root,archive_path,token,progress=None,cancelled=None):
   for key,value in prefs.items():
    if key not in settings_allowed() or not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,80}',value):raise ArchiveError('恢复配置不符合白名单。')
    default=re.sub(r'^'+key+r'=.*$',key+'='+value,default,flags=re.M)
-  default=re.sub(r'^(MODEL_CALLS_ENABLED|VISION_CALLS_ENABLED)=.*$',r'\1=false',default,flags=re.M)
+  default=re.sub(r'^(MODEL_CALLS_ENABLED|VISION_CALLS_ENABLED|QWEN_TEXT_CALLS_ENABLED|QWEN_TEXT_USE_VISION_KEY)=.*$',r'\1=false',default,flags=re.M)
   (payload/'.env').write_text(default);(payload/'.env').chmod(0o600)
   # Container workspaces and business storage require the same shared permissions as fresh projects.
   for base in [payload/'generated-projects',payload/'data/applications']:

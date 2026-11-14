@@ -21,6 +21,51 @@ lock=threading.RLock()
 class DifyError(Exception):pass
 
 
+# Only stable, allowlisted codes are retained. Provider messages may contain secrets
+# or uploaded text and must never enter local diagnostics, logs or UI.
+ERROR_HINTS = {
+    'provider_not_initialize':'知识库所用模型尚未就绪，请在Dify控制台核对免费模型配置；不自动添加付费密钥。',
+    'provider_quota_exceeded':'Dify模型额度不足，请核对免费额度；已停止，不自动充值或付费回退。',
+    'dataset_not_initialized':'知识库尚未完成初始化或索引，请在控制台核对状态；不会自动重试。',
+    'model_currently_not_support':'知识库所用模型当前不可用，请核对已有免费模型配置。',
+    'invalid_param':'Dify拒绝了请求参数，请核对接口与知识库设置；不自动改参数重试。',
+    'completion_request_error':'Dify内部模型调用未完成，请核对服务状态；不自动重试。',
+    'unknown':'未取得可识别的安全错误码；仅凭HTTP状态不能确定是参数、模型配置还是额度问题。',
+}
+PARAMETER_FIELDS=frozenset({'query','retrieval_model','retrieval_model.search_method',
+    'retrieval_model.top_k','retrieval_model.reranking_enable','retrieval_model.reranking_model',
+    'retrieval_model.score_threshold_enabled','retrieval_model.score_threshold','attachment_ids'})
+
+
+def safe_error_code(exc):
+    return safe_error_info(exc)['code']
+
+
+def safe_error_info(exc):
+    result={'code':'unknown','fields':[]}
+    try:
+        raw=exc.read(8193)
+        if len(raw)>8192:return result
+        value=json.loads(raw)
+        code=value.get('code') if isinstance(value,dict) else None
+        result['code']=code if isinstance(code,str) and code in ERROR_HINTS else 'unknown'
+        if result['code']=='invalid_param':
+            errors=value.get('errors',{})
+            # Structured field identifiers only; never error values or raw messages.
+            if isinstance(errors,dict):result['fields']=sorted(PARAMETER_FIELDS.intersection(errors))
+            elif isinstance(errors,list):
+                paths=[]
+                for error_item in errors[:32]:
+                    loc=error_item.get('loc') if isinstance(error_item,dict) else None
+                    if isinstance(loc,list) and all(isinstance(x,str) for x in loc):paths.append('.'.join(loc))
+                result['fields']=sorted(PARAMETER_FIELDS.intersection(paths))
+        return result
+    except Exception:return result
+    finally:
+        try:exc.close()
+        except Exception:pass
+
+
 def connect():
     if DATA.is_symlink() or any((DATA/('state.sqlite3'+suffix)).is_symlink() for suffix in ('','-wal','-shm','-journal')):raise DifyError('Dify本地记录路径异常。')
     DATA.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -31,6 +76,8 @@ def connect():
     CREATE TABLE IF NOT EXISTS collections(id TEXT PRIMARY KEY,name TEXT,created REAL);
     CREATE TABLE IF NOT EXISTS documents(dataset_id TEXT,sha256 TEXT,local_id TEXT,name TEXT,remote_id TEXT,batch TEXT,status TEXT,PRIMARY KEY(dataset_id,sha256));
     CREATE TABLE IF NOT EXISTS controls(id INTEGER PRIMARY KEY CHECK(id=1),paused TEXT);
+    CREATE TABLE IF NOT EXISTS call_errors(call_id TEXT PRIMARY KEY,error_code TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS call_error_fields(call_id TEXT PRIMARY KEY,fields_json TEXT NOT NULL);
     ''')
     if 'credit_reserve' not in {row[1] for row in conn.execute('PRAGMA table_info(calls)')}:conn.execute('ALTER TABLE calls ADD COLUMN credit_reserve INTEGER NOT NULL DEFAULT 0')
     conn.commit();return conn
@@ -94,14 +141,18 @@ def call(method,path,payload=None,*,kind='metadata',cache_seconds=0):
                 if not isinstance(value,dict):raise DifyError('Dify响应格式无效。')
         except error.HTTPError as exc:
             status=str(exc.code)
-            # Do not expose response bodies, request headers or credentials.
+            diagnostic=safe_error_info(exc);code=diagnostic['code']
             conn=connect()
             try:
                 conn.execute('UPDATE calls SET status=? WHERE id=?',(status,identifier))
-                if exc.code in {401,402,403,429}:conn.execute('INSERT OR REPLACE INTO controls VALUES (1,?)',('鉴权、额度或限流拒绝（HTTP '+status+'），请检查控制台；未自动重试。',))
+                conn.execute('INSERT INTO call_errors VALUES (?,?)',(identifier,code))
+                conn.execute('INSERT INTO call_error_fields VALUES (?,?)',(identifier,json.dumps(diagnostic['fields'])))
+                if exc.code in {401,402,403,429} or code in {'provider_not_initialize','provider_quota_exceeded','model_currently_not_support'}:
+                    conn.execute('INSERT OR REPLACE INTO controls VALUES (1,?)',('鉴权、模型配置、额度或限流拒绝（HTTP '+status+'，'+code+'），请检查控制台；未自动重试。',))
                 conn.commit()
             finally:conn.close()
-            raise DifyError('Dify拒绝请求（HTTP '+status+'），未自动重试或升级。') from None
+            field_hint=(' 参数字段：'+', '.join(diagnostic['fields'])+'。') if diagnostic['fields'] else ''
+            raise DifyError('Dify拒绝请求（HTTP '+status+'，'+code+'）。'+ERROR_HINTS[code]+field_hint+' 未自动重试或升级。') from None
         except Exception as exc:
             conn=connect()
             try:
@@ -138,7 +189,17 @@ def status():
         try:confirmed=policy();confirmed_at=confirmed.get('confirmed_at')
         except DifyError:confirmed={};confirmed_at=None
         allocated=conn.execute('SELECT COALESCE(SUM(credit_reserve),0) FROM calls WHERE at>=?',(confirmed.get('guard_start',0),)).fetchone()[0]
+        last=conn.execute('SELECT c.status,c.at,e.error_code,f.fields_json FROM calls c LEFT JOIN call_errors e ON c.id=e.call_id LEFT JOIN call_error_fields f ON c.id=f.call_id ORDER BY c.at DESC,c.rowid DESC LIMIT 1').fetchone()
+        failure=None
+        if last and last['status'].isdigit() and 400<=int(last['status'])<600:
+            code=last['error_code'] if last['error_code'] in ERROR_HINTS else 'unknown'
+            try:fields=json.loads(last['fields_json'] or '[]')
+            except (ValueError,TypeError):fields=[]
+            fields=sorted({x for x in fields if isinstance(x,str) and x in PARAMETER_FIELDS}) if isinstance(fields,list) else []
+            field_hint=(' 参数字段：'+', '.join(fields)+'。') if fields else ''
+            failure={'http_status':int(last['status']),'code':code,'message':ERROR_HINTS[code]+field_hint,'at':last['at']}
         return {'policy_revision':policy_revision(),'reserved_credits':allocated,'local_remaining_credits':max(0,confirmed.get('local_total_credit_ceiling',60)-confirmed.get('observed_used_credits',0)-allocated) if confirmed_at else 0,'configured':bool((dotenv_values(ROOT/'.env').get('RAG_API_KEY') or '').strip()),'free_only':True,'model':MODEL,
+            'last_error':failure,
             'free_confirmed_at':confirmed_at,'last_observed_used_credits':confirmed.get('observed_used_credits') if confirmed_at else None,'local_credit_ceiling':confirmed.get('local_total_credit_ceiling',60),'paused':pause[0] if pause else None,'calls_last_24h':conn.execute('SELECT COUNT(*) FROM calls WHERE at>?',(time.time()-86400,)).fetchone()[0],
             'limits':{'requests_per_minute':4,'requests_per_24h':40,'vector_operations_per_24h':12},
             'collections':[dict(row) for row in conn.execute('SELECT * FROM collections ORDER BY created')],
@@ -214,8 +275,19 @@ def refresh(dataset_id:uuid.UUID):
     return status()
 
 
+def retrieval_payload(query,top_k=3):
+    # Dify HitTestingPayload + HitTestingService enforce 250 characters.
+    # Keep explicit free-only semantic search; do not inherit remote reranking.
+    if not isinstance(query,str) or not query.strip():raise DifyError('检索词不能为空，未发起Dify请求。')
+    if type(top_k) is not int or not 1<=top_k<=3:raise DifyError('免费检索只允许1–3个结果，未发起Dify请求。')
+    return {'query':query.strip()[:250],'retrieval_model':{
+        'search_method':'semantic_search','reranking_enable':False,'top_k':top_k,'score_threshold_enabled':False}}
+
+
 def capture(ids,query,top_k=3,max_characters=6000):
     if not ids:return None
+    payload=retrieval_payload(query,top_k)
+    if type(max_characters) is not int or not 1<=max_characters<=6000:raise DifyError('检索片段上限须为1–6000字符，未发起Dify请求。')
     if len(set(ids))!=len(ids) or len(ids)>2:raise DifyError('最多选择2个不同的Dify知识库。')
     chunks=[];seen=set()
     for dataset in ids:
@@ -225,7 +297,7 @@ def capture(ids,query,top_k=3,max_characters=6000):
             rows=conn.execute('SELECT * FROM documents WHERE dataset_id=?',(identifier,)).fetchall()
             if not any(row['status']=='completed' for row in rows):raise DifyError('Dify知识库尚无索引完成的资料，请刷新状态。')
         finally:conn.close()
-        result=call('POST',f'/datasets/{identifier}/retrieve',{'query':query[:2000],'retrieval_model':{'search_method':'semantic_search','reranking_enable':False,'top_k':min(top_k,3),'score_threshold_enabled':False}},kind='retrieve',cache_seconds=86400)
+        result=call('POST',f'/datasets/{identifier}/retrieve',payload,kind='retrieve',cache_seconds=86400)
         records=result.get('records',[])
         if not isinstance(records,list):raise DifyError('Dify检索结果格式异常，未采信来源。')
         for item in records:
@@ -250,7 +322,9 @@ def capture(ids,query,top_k=3,max_characters=6000):
     for chunk in chunks[:top_k]:
         if remaining<=0:break
         value={**chunk,'content':chunk['content'][:remaining]};remaining-=len(value['content']);bounded.append(value)
-    return {'provider_id':'dify_cloud','status':'ok' if bounded else 'empty','query':query,'retrieval_id':str(uuid.uuid4()),'chunks':bounded,'message':'Dify远程语义检索；同查询复用24小时缓存，不进行问答生成。' if bounded else '没有可核验的命中片段；不编造来源，同查询复用缓存。'}
+    return {'provider_id':'dify_cloud','status':'ok' if bounded else 'empty','query':query,
+            'retrieval_query':payload['query'],'query_truncated':len(query.strip())>250,
+            'retrieval_id':str(uuid.uuid4()),'chunks':bounded,'message':('检索词按接口上限截取前250字符。' if len(query.strip())>250 else '')+('Dify远程语义检索；同查询复用24小时缓存，不进行问答生成。' if bounded else '没有可核验的命中片段；不编造来源，同查询复用缓存。')}
 
 
 class Search(BaseModel):

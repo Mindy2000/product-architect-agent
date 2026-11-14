@@ -1,6 +1,7 @@
 """Standard-library-only, allowlisted releases and side-by-side local upgrades."""
 from __future__ import annotations
-import hashlib,json,os,re,shutil,sqlite3,stat,subprocess,tempfile,uuid,zipfile,importlib.util
+import hashlib,json,os,re,shutil,sqlite3,stat,subprocess,tempfile,uuid,zipfile,importlib.util,posixpath
+from urllib.parse import urlsplit,unquote
 from pathlib import Path,PurePosixPath
 from contextlib import closing
 
@@ -10,7 +11,7 @@ LIMIT=64*1024*1024
 ROOT=Path(__file__).resolve().parents[1]
 _spec=importlib.util.spec_from_file_location('pa_release_policy',ROOT/'apps/api/app/release_policy.py');_policy=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(_policy)
 compatibility=_policy.compatibility
-PUBLIC_DOCS={'COLLABORATION_EVOLUTION.md','INTERACTIVE_EXPANSION.md','MULTI_AGENT.md','SETUP.md','DISTRIBUTION.md','WORKBENCH_MAINTENANCE.md','OFFLINE_QUALITY_AND_MAINTENANCE.md','PROJECT_STATUS.md','AUDIT_CLOSEOUT.md','AUDIT_OPTIMIZATION.md'}
+PUBLIC_DOCS={'IMPROVEMENT_BATCHES.md','COLLABORATION_EVOLUTION.md','INTERACTIVE_EXPANSION.md','MULTI_AGENT.md','SETUP.md','DISTRIBUTION.md','WORKBENCH_MAINTENANCE.md','OFFLINE_QUALITY_AND_MAINTENANCE.md','PROJECT_STATUS.md','AUDIT_CLOSEOUT.md','AUDIT_OPTIMIZATION.md'}
 BENCHMARKS={name+'.spec.ts' for name in ('todo-v1','todo-v2','notes-v1','expenses-v1','habits-v1','reading-v1')}
 ROOT_FILES={'README.md','.env.example','.gitignore','.gitattributes','package.json','package-lock.json','requirements.txt','requirements.lock','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md'}
 SOURCE_DIRS={'apps/api/app','apps/web/src','templates','runtime','tests','scripts','.github/workflows'}
@@ -58,6 +59,16 @@ def configured_secrets(root):
             if len(value)>=8:values.append(value.encode())
     return values
 
+def validate_doc_links(files):
+    """Published Markdown must not point to absent local evidence or escape the ZIP."""
+    for name,raw in files.items():
+        if not name.endswith('.md'):continue
+        for target in re.findall(r'\]\(([^)\s]+)(?:\s+[^)]*)?\)',raw.decode('utf-8')):
+            link=urlsplit(target.strip('<>'))
+            if link.scheme or link.netloc or not link.path:continue
+            path=posixpath.normpath(posixpath.join(posixpath.dirname(name),unquote(link.path)))
+            if path not in files:raise DistributionError('公开文档链接未随包分发：'+name+' → '+path)
+
 def build(root,output,kind='macos-install',release_version=None):
     root=Path(root).resolve();output=Path(output).resolve()
     if kind not in {'source','macos-install','windows-install'}:raise DistributionError('不支持的发行包类型。')
@@ -85,7 +96,7 @@ def build(root,output,kind='macos-install',release_version=None):
         if len(raw)>10*1024*1024:raise DistributionError('发行单文件过大。')
         if any(key in raw for key in secrets):raise DistributionError('发行内容发现本地凭证，已停止；不会输出凭证。')
         files[name]=raw
-    if (root/'docs/DISTRIBUTION.md').is_file():files['README.md']=(root/'docs/DISTRIBUTION.md').read_bytes()
+    validate_doc_links(files)
     for name in ['package.json','requirements.lock','scripts/manage.py','scripts/distribution.py','.env.example']:
         if name not in files:raise DistributionError('发行包缺少必要文件：'+name)
     for line in files['.env.example'].decode().splitlines():
@@ -196,6 +207,40 @@ def user_files(root):
     if env.is_file():files.append(env)
     return files
 
+def file_digest(path):
+    value=hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda:stream.read(1024*1024),b''):value.update(block)
+    return value.hexdigest()
+
+def data_snapshot(root,files):
+    """Private in-memory inventory, including WAL; no secret contents in receipts."""
+    result={}
+    for path in files:
+        candidates=[path]
+        if path.suffix in {'.sqlite3','.db'}:
+            candidates.extend(path.with_name(path.name+suffix) for suffix in ('-wal','-shm','-journal'))
+        for candidate in candidates:
+            if candidate.is_symlink():raise DistributionError('数据或数据库日志包含链接，已停止升级。')
+            if not candidate.exists():continue
+            info=candidate.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink>1:raise DistributionError('升级只支持普通独立数据文件。')
+            # SQLite may update shared-memory lock bookkeeping during read-only backup.
+            if candidate.name.endswith('-shm'):continue
+            # Opening a clean WAL database read-only can create an empty WAL.
+            # It has no frames; real WAL contents and the main DB remain fingerprinted.
+            if candidate.name.endswith('-wal') and info.st_size==0:continue
+            result[candidate.relative_to(root).as_posix()]=(info.st_size,info.st_mtime_ns,file_digest(candidate))
+    return result
+
+def check_database(path):
+    try:
+        with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as conn:
+            if [row[0] for row in conn.execute('PRAGMA quick_check')]!=['ok']:
+                raise DistributionError('升级副本的数据库完整性检查失败；原目录保留。')
+    except sqlite3.Error:
+        raise DistributionError('升级副本中存在不可读取的数据库；原目录保留。') from None
+
 def upgrade(root,package,destination,apply=False):
     root=Path(root).resolve();destination=Path(destination).absolute();manifest=inspect(package)
     policy=compatibility(json.loads((root/'package.json').read_text())['version'],manifest['version'])
@@ -206,8 +251,11 @@ def upgrade(root,package,destination,apply=False):
     ancestor=destination.parent
     while not ancestor.exists():ancestor=ancestor.parent
     if shutil.disk_usage(ancestor).free<total+LIMIT+256*1024*1024:raise DistributionError('空间不足以保留旧版并复制数据，请先整理。')
-    report={'compatibility':policy,'version':manifest['version'],'destination':str(destination),'source':str(root),'copy_bytes':total,'source_preserved':True,'applied':False,'credentials_included_in_private_local_copy':(root/'.env').is_file()}
+    report={'compatibility':policy,'version':manifest['version'],'destination':str(destination),'source':str(root),'copy_bytes':total,'source_preserved':True,'applied':False,'credentials_included_in_private_local_copy':(root/'.env').is_file(),
+            'checks_on_apply':['普通文件逐份哈希核对','数据库副本完整性检查','复制前后源数据一致性检查','只提交完整新目录'],
+            'rollback_notice':'旧目录完整保留，可停止新副本后返回；新副本的后续数据不会自动同步回旧目录。'}
     if not apply:return report
+    before=data_snapshot(root,files)
     # Same-volume staging means a failed copy never becomes a published new installation.
     destination.parent.mkdir(parents=True,exist_ok=True);stage=destination.parent/('.pa-upgrade-'+uuid.uuid4().hex)
     try:
@@ -219,7 +267,10 @@ def upgrade(root,package,destination,apply=False):
                 parent.mkdir(exist_ok=True);parent.chmod(stat.S_IMODE(original.stat().st_mode)&0o777)
             if source.suffix in {'.sqlite3','.db'}:
                 with closing(sqlite3.connect(source.as_uri()+'?mode=ro',uri=True)) as old,closing(sqlite3.connect(target)) as new:old.backup(new)
-            else:shutil.copyfile(source,target)
+                check_database(target)
+            else:
+                shutil.copyfile(source,target)
+                if file_digest(target)!=before[relative.as_posix()][2]:raise DistributionError('复制结果与源数据不一致；未提交升级副本。')
             target.chmod(0o600 if source.name=='.env' else stat.S_IMODE(source.stat().st_mode)&0o777)
         migration_backup=None
         db=stage/'data/knowledge/library.sqlite3'
@@ -229,7 +280,10 @@ def upgrade(root,package,destination,apply=False):
             backup.chmod(0o600);migration_backup='data/upgrade-pre-migration/library.sqlite3'
             with closing(sqlite3.connect(db)) as conn:
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone() and 'cancel_requested' not in {r[1] for r in conn.execute('PRAGMA table_info(jobs)')}:conn.execute('ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0');conn.commit()
+            check_database(db)
+        if data_snapshot(root,user_files(root))!=before:raise DistributionError('升级期间源数据发生变化；未提交副本，请停止所有写入后重试。')
         receipt={'compatibility':policy,'pre_migration_database':migration_backup,'source':str(root),'destination':str(destination),'version':manifest['version'],'policy':'old_directory_preserved_no_automatic_data_rollback'}
+        receipt['integrity_checks']={'files_verified':len(files),'databases_verified':sum(p.suffix in {'.sqlite3','.db'} for p in files),'source_unchanged':True}
         state=stage/'data';state.mkdir(exist_ok=True,mode=0o700);(state/'upgrade-receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2));(state/'upgrade-receipt.json').chmod(0o600)
         os.rename(stage,destination)
     except BaseException:shutil.rmtree(stage,ignore_errors=True);raise

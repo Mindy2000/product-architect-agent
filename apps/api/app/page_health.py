@@ -2,7 +2,7 @@
 import hashlib
 import json
 import re
-from . import runner, store
+from . import runner, store, interface_checks
 
 
 def coverage(run_id):
@@ -15,14 +15,15 @@ def coverage(run_id):
             continue
         target = '/' if route=='/' else '/#'+route
         if target not in routes:routes.append(target)
-    return {'routes':routes,'pending_routes':pending,
+    contracts = interface_checks.contract(run_id)
+    return {**({'interface_contract': contracts} if contracts['checks'] else {}), 'routes':routes,'pending_routes':pending,
             'checks':['fresh_browser_context','root_content','uncaught_errors','horizontal_overflow','reload','keyboard_focus'],
             'manual_checks':['空数据提示是否符合需求','业务错误状态及恢复','动态路由实例','视觉与完整无障碍','逐条业务验收标准']}
 
 
 def script(run_id):
     template = (runner.WORKER_CONTEXT.parent/'health.spec.ts').read_text()
-    return template.replace('/* PA_ROUTES */ ["/"]', json.dumps(coverage(run_id)['routes'],ensure_ascii=False))
+    return template.replace('/* PA_ROUTES */ ["/"]', json.dumps(coverage(run_id)['routes'],ensure_ascii=False)) + interface_checks.script(run_id)
 
 
 def fingerprint(run_id):

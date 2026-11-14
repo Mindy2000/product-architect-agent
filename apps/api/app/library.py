@@ -197,6 +197,8 @@ def _process_document(doc_id:str,job_id:str):
         finally:conn.close()
         empty=[page['page'] for page in pages if page['page'] and not page['text'].strip()]
         warnings=[f"以下页/文本单元无可提取文字，未索引：{','.join(map(str,empty[:30]))}"] if empty else []
+        from .document_quality import assess
+        warnings.extend(assess(pages)['warnings'])
         ocr_pages=[page['page'] for page in pages if page.get('method')=='local_ocr']
         if ocr_pages:warnings.append('已使用本地免费OCR识别以下页：'+','.join(map(str,ocr_pages))+'。识别可能有误，请核对引用原页。')
         if doc['filename'].lower().endswith(('.docx','.pptx','.xlsx')):
@@ -346,7 +348,8 @@ def preview_chunks(document_id:uuid.UUID,offset:int=0,limit:int=10):
     if offset<0 or not 1<=limit<=20:raise HTTPException(422,'分页参数无效。')
     doc=get_document(document_id)
     conn=connect()
-    try:return {'document':doc,'items':[dict(row) for row in conn.execute('SELECT * FROM chunks WHERE document_id=? ORDER BY ordinal LIMIT ? OFFSET ?',(str(document_id),limit,offset)).fetchall()]}
+    from .document_quality import preview as quality_preview
+    try:return {'document':doc,'quality':quality_preview(conn,doc),'items':[dict(row) for row in conn.execute('SELECT * FROM chunks WHERE document_id=? ORDER BY ordinal LIMIT ? OFFSET ?',(str(document_id),limit,offset)).fetchall()]}
     finally:conn.close()
 
 
@@ -437,8 +440,10 @@ def search(payload:SearchInput,record=True):
                 remaining-=len(content)
                 location=f"第{row['page']}页" if row['page'] else f"第{row['line_start']}–{row['line_end']}行"
                 result['chunks'].append({'chunk_id':row['id'],'content':content,'score':None,
-                    'collection_id':row['collection_id'],'document_id':row['document_id'],'document_sha256':row['document_sha256'],'token_coverage':round(coverage,4),'matched_keywords':matched,
+                    'collection_id':row['collection_id'],'document_id':row['document_id'],'document_sha256':row['document_sha256'],'token_coverage':round(coverage,4),'matched_keywords':matched,'content_sha256':hashlib.sha256(content.encode()).hexdigest(),'source_chunk_sha256':hashlib.sha256(row['content'].encode()).hexdigest(),
                     'source':{'source_id':row['document_id'],'title':row['filename'],'uri':f"knowledge://{row['collection_id']}/{row['document_id']}",'location':location}})
+        result['outcome']='matched' if result['chunks'] else 'no_results'
+        if not result['chunks']:result['message']='本地检索已完成，但没有满足当前条件的片段；这不是服务故障，也未自动切换远程检索。'
         result['duration_ms']=int((time.monotonic()-started)*1000)
         if record:
             conn.execute('INSERT INTO retrievals VALUES (?,?,?,?)',(result['retrieval_id'],now(),payload.model_dump_json(),json.dumps(result,ensure_ascii=False)))
@@ -486,11 +491,26 @@ def check_citations(payload:CitationCheck):
             if item.get('provider_id')=='dify_cloud':
                 result.append({'chunk_id':item.get('chunk_id'),'status':'remote_snapshot','note':'远程冻结引用；未自动查询，节省额度'})
                 continue
-            identifier=item.get('document_id') or (item.get('source') or {}).get('source_id')
+            source=item.get('source') if isinstance(item.get('source'),dict) else {}
+            identifier=item.get('document_id') or source.get('source_id')
+            if not isinstance(identifier,str) or not isinstance(item.get('chunk_id'),str):
+                result.append({'chunk_id':item.get('chunk_id') if isinstance(item.get('chunk_id'),str) else '', 'status':'invalid_metadata','content_status':'not_supplied'})
+                continue
             row=conn.execute('SELECT sha256,status FROM documents WHERE id=?',(identifier,)).fetchone()
             newer=conn.execute("SELECT v.document_id FROM document_versions v JOIN documents d ON d.id=v.document_id WHERE v.supersedes=? AND d.status='ready' LIMIT 1",(identifier,)).fetchone()
             state='deleted' if not row else 'superseded' if newer else 'changed' if item.get('document_sha256')!=row['sha256'] else 'ready' if row['status']=='ready' else 'not_ready'
-            result.append({'chunk_id':item.get('chunk_id'),'document_id':identifier,'status':state,'replacement_id':newer['document_id'] if newer else None})
+            chunk=conn.execute('SELECT document_id,content FROM chunks WHERE id=?',(item.get('chunk_id'),)).fetchone()
+            content_state='not_supplied'
+            if state=='ready':
+                if not chunk or chunk['document_id']!=identifier:state='chunk_missing'
+                elif item.get('source_chunk_sha256') and hashlib.sha256(chunk['content'].encode()).hexdigest()!=item['source_chunk_sha256']:state='changed'
+                elif 'content' in item:
+                    content=item['content']
+                    valid=isinstance(content,str) and bool(content) and chunk['content'].startswith(content)
+                    if valid and item.get('content_sha256'):valid=hashlib.sha256(content.encode()).hexdigest()==item['content_sha256']
+                    content_state='prefix_verified' if valid else 'mismatch'
+                    if not valid:state='changed'
+            result.append({'chunk_id':item.get('chunk_id'),'document_id':identifier,'status':state,'content_status':content_state,'replacement_id':newer['document_id'] if newer else None})
         return {'items':result,'note':'历史冻结片段仍保留；重新生成方案才更新引用。'}
     finally:conn.close()
 

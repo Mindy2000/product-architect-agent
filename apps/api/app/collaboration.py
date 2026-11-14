@@ -58,7 +58,11 @@ class RuleInput(BaseModel):
         if any(not x.strip() or len(x)>120 for x in self.targets):raise ValueError('范围标记须为1–120字符')
         if self.scope_type!='project' and not self.targets:raise ValueError('请填写适用页面、功能或任务标记')
         if any(not k.strip() or len(k)>80 or not v.strip() or len(v)>200 for k,v in self.constraints.items()):raise ValueError('结构化规则键值过长或为空')
+        if len({key.strip() for key in self.constraints})!=len(self.constraints):raise ValueError('结构化字段去除空格后重复')
+        self.targets=list(dict.fromkeys(value.strip() for value in self.targets))
+        self.constraints={key.strip():value.strip() for key,value in self.constraints.items()}
         return self
+    priority:int=Field(default=0,ge=0,le=100)
     active:bool=True
     revision:int=Field(default=0,ge=0)
 
@@ -68,7 +72,7 @@ def rules(identifier:uuid.UUID):return {'scope':lineage(identifier),'items':reco
 @router.post('/projects/{identifier}/rules')
 def add_rule(identifier:uuid.UUID,payload:RuleInput):
     require(identifier);scope=lineage(identifier);v={**payload.model_dump(),'id':str(uuid.uuid4()),'revision':1,'created_from':str(identifier),'history':[],'updated_at':now()}
-    v['history']=[{k:v[k] for k in ('revision','content','title','active','source','updated_at','scope_type','targets','constraints')}]
+    v['history']=[{k:v[k] for k in ('revision','content','title','active','source','updated_at','scope_type','targets','constraints','priority')}]
     return insert(scope,'rule',v,20)
 
 @router.put('/projects/{identifier}/rules/{rule_id}')
@@ -80,8 +84,9 @@ def edit_rule(identifier:uuid.UUID,rule_id:uuid.UUID,payload:RuleInput):
         v=json.loads(row[0])
         if payload.revision!=v['revision']:raise HTTPException(409,'规则已修改，请刷新后再保存。')
         if len(v['history'])>=100:raise HTTPException(409,'规则修订已达到100条上限。')
+        if 'priority' not in payload.model_fields_set:payload.priority=v.get('priority',0)
         v.update(**{**payload.model_dump(),'revision':v['revision']+1,'updated_at':now()})
-        v['history'].append({k:v[k] for k in ('revision','content','title','active','source','updated_at','scope_type','targets','constraints')})
+        v['history'].append({k:v[k] for k in ('revision','content','title','active','source','updated_at','scope_type','targets','constraints','priority')})
         c.execute('UPDATE collaboration_records SET revision=?,value=? WHERE scope=? AND kind=? AND id=?',(v['revision'],json.dumps(v,ensure_ascii=False),scope,'rule',str(rule_id)))
     return v
 
@@ -90,13 +95,9 @@ def applicable(rule,scope):
     return kind=='project' or bool(set(rule.get('targets',[]))&set(scope.get(kind,[])))
 
 def conflicts(rules):
-    warnings=[]
-    for i,a in enumerate(rules):
-        for b in rules[i+1:]:
-            if a.get('content','').strip()==b.get('content','').strip():warnings.append({'kind':'duplicate','ids':[a['id'],b['id']],'message':'规则正文重复'})
-            for key,value in a.get('constraints',{}).items():
-                if key in b.get('constraints',{}) and b['constraints'][key]!=value:warnings.append({'kind':'conflict','ids':[a['id'],b['id']],'key':key,'message':'相同结构化字段取值不同'})
-    return warnings
+    from .rule_analysis import analyze
+    return analyze(rules)
+
 
 def freeze_rules(parent,ids=None,scope=None):
     if not parent:return []
@@ -106,7 +107,7 @@ def freeze_rules(parent,ids=None,scope=None):
         if not wanted<={v['id'] for v in values}:raise HTTPException(409,'选中的规则已撤销、范围不匹配或不属于项目。')
         values=[v for v in values if v['id'] in wanted]
     if any(w['kind']=='conflict' for w in conflicts(values)):raise HTTPException(409,'适用规则有结构化字段冲突，请修订或取消本次选择。')
-    return [{k:v[k] for k in ('id','revision','title','content','source','created_from','scope_type','targets','constraints') if k in v} for v in values]
+    return [{k:v[k] for k in ('id','revision','title','content','source','created_from','scope_type','targets','constraints','priority') if k in v} for v in values]
 
 class RuleSelection(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -123,7 +124,7 @@ class RuleSelection(BaseModel):
 def rule_selection(identifier:uuid.UUID,payload:RuleSelection):
     scope=payload.model_dump();items=[v for v in records(lineage(identifier),'rule') if v['active'] and applicable(v,scope)]
     chosen=items if payload.rule_ids is None else [v for v in items if v['id'] in {str(x) for x in payload.rule_ids}]
-    return {'items':items,'warnings':conflicts(chosen),'notice':'只检查明确结构化键值及重复文本；自由文本含义冲突仍需人工核对。'}
+    return {'items':items,'warnings':conflicts(chosen),'notice':'检查范围重叠、明确键值及冗余。优先级不自动覆盖规则，自由文本含义冲突仍需人工核对。'}
 
 class QuestionInput(BaseModel):
     model_config=ConfigDict(extra='forbid')

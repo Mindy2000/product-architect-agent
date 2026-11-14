@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from .security_policy import LocalSafetyMiddleware, MAX_QUEUED_RUNS, redact, safe_output, status as security_status
 
 from .graph import build_graph
+from .text_models import frozen_roles, catalog as text_catalog
 from .model import SUPPORTED_MODELS, BudgetExceeded, ModelCallFailed, ModelNotConfigured, budget_status
 from .runner import SandboxError, worker_image_available
 from . import store, workbench, regression, acceptance
@@ -225,6 +226,7 @@ def capabilities():
         "model_provider": settings["provider"],
         "model": settings["model"],
         "available_models": list(SUPPORTED_MODELS),
+        "text_models": text_catalog(settings),
         "sandbox": {"engine": "docker", "network": "none", "runtime_image": "product-architect-worker:1.0", "ready": worker_image_available()},
     }
 
@@ -235,6 +237,12 @@ def create_run(payload: RunRequest, background_tasks: BackgroundTasks):
     if not proposal or proposal['status'] != 'ready' or proposal['revision'] != payload.design_revision:
         raise HTTPException(status_code=409,detail='请先保存并确认最新产品方案。')
     payload_settings = designs.DesignRequest.model_validate({key:proposal[key] for key in designs.DesignRequest.model_fields if key in proposal})
+    selected_roles=frozen_roles(payload_settings.model_name,payload_settings.role_models)
+    if 'qwen3.8-flash' in selected_roles.values():
+        from .model import _get_settings, validate_route
+        from .text_models import route
+        try:validate_route(route('qwen3.8-flash',_get_settings()))
+        except (ValueError,ModelNotConfigured) as error:raise HTTPException(422,str(error)) from None
     parent = store.get_run(str(payload_settings.parent_run_id)) if payload_settings.parent_run_id else None
     if payload_settings.parent_run_id and (not parent or not (parent.get('status') == 'completed' or (parent.get('status') == 'paused' and (parent.get('source_import') or parent.get('local_data_restored'))))):
         raise HTTPException(status_code=409,detail='原项目状态不支持追加修改。')
@@ -268,6 +276,9 @@ def create_run(payload: RunRequest, background_tasks: BackgroundTasks):
         "change_request": payload_settings.request if parent else "",
         "parent_run_id": str(payload_settings.parent_run_id) if payload_settings.parent_run_id else None,
         "model_name": payload_settings.model_name,
+        "role_models": selected_roles,
+        "review_context_version": 2,
+        "agent_protocol_version": 3,
         "acceptance_profile": (parent.get("acceptance_profile", "generated") if parent and payload_settings.acceptance_profile == "generated" else payload_settings.acceptance_profile),
         "stage": "queued",
         "status": "queued",
@@ -491,7 +502,7 @@ def restore_version(run_id: str, payload: RestoreRequest, background_tasks: Back
     initialize_workspace(new_id,application_type=restored_spec.get('application_type','frontend'),crud_schema=restored_spec.get('crud_schema'))
     apply_generated_files(new_id,files,replace_all=True)
     now=datetime.now(timezone.utc).isoformat()
-    initial={key:parent[key] for key in ("product_spec","acceptance_criteria","plan","plan_details","model_name","acceptance_profile") if key in parent}
+    initial={key:parent[key] for key in ("product_spec","acceptance_criteria","plan","plan_details","model_name","role_models","review_context_version","acceptance_profile") if key in parent}
     initial["product_spec"]=restored_spec
     initial.update(runtime_version=2,execution_step_limit=40,executor_turns=0,run_budget_cny=5,model_call_limit=80,run_id=new_id,user_request="恢复项目版本 "+payload.commit,parent_run_id=run_id,repair_round=0,repair_limit=0,status="paused",can_resume=True,stage="generation",created_at=now,trace=[{"stage":"restore","status":"completed","at":now,"summary":"从 Git 快照创建暂停副本，原项目保留；等待用户手动继续构建与验收，不调用模型。"}])
     store.create_run(new_id,initial["user_request"],initial,now)

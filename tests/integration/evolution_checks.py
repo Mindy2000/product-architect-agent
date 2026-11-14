@@ -45,7 +45,7 @@ def run(page,rid,api,root,check):
  check('自定义模板逐文件预览、确认保存、无模型方案及独立源码复用')
  # Timeline + controlled branches; original sources and checkpoints never change.
  page.locator('summary').get_by_text('执行时间轴与固定决策分支',exact=True).click();page.get_by_role('button',name='读取执行记录',exact=True).click();expect(page.get_by_label('源码回放位置',exact=True)).to_be_visible()
- page.get_by_role('button',name='绑定检查点、回执及原限额').click();expect(page.get_by_label('两个固定决策分支（JSON）')).to_be_visible()
+ page.get_by_role('button',name='绑定检查点、回执及原限额').click();page.get_by_text('高级：固定决策 JSON',exact=True).click();expect(page.get_by_label('两个固定决策分支（JSON）')).to_be_visible()
  with page.expect_response(lambda r:r.url.endswith('/branches') and r.request.method=='POST') as branched:page.get_by_role('button',name='在独立副本比较两个分支').click()
  b=branched.value.json();assert branched.value.status==200,b;assert b['provider_calls']==0 and b['same_source'];assert b['branches'][0]['stop_reason']!=b['branches'][1]['stop_reason'];assert b['basis']['checkpoint_match']
  after=page.request.get(api+'/runs/'+rid).json();assert before['team_steps']==after['team_steps'];assert before['status']==after['status'];check('实际执行时间轴、checkpoint关联、固定分支不同停止结果且原任务不变')

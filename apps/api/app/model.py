@@ -1,4 +1,4 @@
-"""DeepSeek text model adapter with a local, conservative spend guard."""
+"""Explicit text provider adapters sharing durable receipts and one spend ledger."""
 from __future__ import annotations
 
 import json
@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, TypeVar, get_args
+from typing import ClassVar
+from .action_protocol import ActionSchemaMixin, ActionFormatError
 
 import truststore
 truststore.inject_into_ssl()
@@ -16,7 +18,7 @@ truststore.inject_into_ssl()
 from .scope import MAX_PAGES
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -29,7 +31,8 @@ load_dotenv(ROOT / ".env", override=False)
 install_log_redaction()
 
 T = TypeVar("T", bound=BaseModel)
-SUPPORTED_MODELS = ("deepseek-flash", "deepseek-v4-pro")
+from . import text_models
+SUPPORTED_MODELS = tuple(text_models.MODELS)
 
 
 class BudgetExceeded(Exception):
@@ -44,6 +47,24 @@ class ModelCallFailed(Exception):
     pass
 
 
+def safe_request_failure(error):
+    """Classify without retaining body, headers, URL, raw message or request data."""
+    status=None
+    if isinstance(error,APIStatusError):
+        candidate=error.status_code
+        status=candidate if type(candidate) is int and 400<=candidate<=599 else None
+        category=('authentication' if status in (401,403) else 'rate_limit' if status==429 else
+                  'request_rejected' if status and status<500 else 'provider_server' if status else 'unknown')
+    elif isinstance(error,APITimeoutError):category='timeout'
+    elif isinstance(error,APIConnectionError):category='connection'
+    else:category='unknown'
+    hints={'authentication':'请核对该文字通道的密钥和权限。','rate_limit':'服务端限流，请稍后由用户决定是否重试。',
+           'request_rejected':'服务端拒绝请求参数或内容；具体原因未采信，不推断为额度不足。',
+           'provider_server':'服务端暂时未完成请求。','timeout':'请求超时，不能确定服务端是否已处理。',
+           'connection':'连接未完成，不能确定服务端是否已处理。','unknown':'未取得可识别的安全异常类别。'}
+    return {'category':category,'http_status':status,'message':hints[category]}
+
+
 class ModelOutputInvalid(ModelCallFailed):
     """A settled response failed parsing; distinct from uncertain network failures."""
     def __init__(self,message: str,usage: dict | None = None):
@@ -51,7 +72,8 @@ class ModelOutputInvalid(ModelCallFailed):
         self.usage = usage or {}
 
 
-ExecutorTool = Literal['user.clarify','web.search','web.read','web.read_evidence','knowledge.read_evidence','reference.read','project.list_files','project.route_template','project.request_dependency','project.read_file','project.apply_changes','project.build','project.test','git.snapshot','git.versions','git.restore']
+LegacyExecutorTool = Literal['user.clarify','web.search','web.read','web.read_evidence','knowledge.read_evidence','reference.read','project.list_files','project.route_template','project.request_dependency','project.read_file','project.apply_changes','project.build','project.test','git.snapshot','git.versions','git.restore']
+ExecutorTool = Literal[LegacyExecutorTool, 'project.patch_file']
 
 
 class ProductSpec(BaseModel):
@@ -85,6 +107,10 @@ class PlanResult(BaseModel):
         return self
 
 
+class FocusedPlanResult(PlanResult):
+    steps: list[PlanStep] = Field(min_length=1, max_length=3)
+
+
 class RepairDecision(BaseModel):
     action: Literal["repair", "replan", "stop"]
     reason: str = Field(min_length=1,max_length=400)
@@ -94,7 +120,7 @@ class ExecutorDecision(BaseModel):
     model_config = {'extra':'forbid'}
     action: Literal['tool', 'complete_task', 'finish', 'stop']
     task_id: str | None = None
-    tool: ExecutorTool | None = None
+    tool: LegacyExecutorTool | None = None
     arguments: dict = Field(default_factory=dict)
     summary: str = Field(min_length=1,max_length=500)
 
@@ -117,6 +143,53 @@ class ExecutorDecision(BaseModel):
         if self.action == 'complete_task' and not self.task_id:
             raise ValueError('完成任务需要task_id。')
         return self
+
+
+class BoundedExecutorDecision(ActionSchemaMixin, ExecutorDecision):
+    action_shapes: ClassVar = [('tool', ['task_id', 'tool', 'arguments']),
+                              ('complete_task', ['task_id']), ('finish', []), ('stop', [])]
+
+
+class CoverageExecutorDecision(BoundedExecutorDecision):
+    tool: ExecutorTool | None = None
+
+
+class TaskCloseoutDecision(CoverageExecutorDecision):
+    action_shapes: ClassVar = [('complete_task', ['task_id']), ('finish', []), ('stop', [])]
+
+    @model_validator(mode='after')
+    def closeout_only(self):
+        if self.action == 'tool':
+            raise ValueError('最后开发步骤只允许完成已实现任务或停止；未执行工具。')
+        return self
+
+
+class SimpleRepairDecision(CoverageExecutorDecision):
+    """After malformed JSON, limit the next action to reading or one flat patch."""
+    @model_validator(mode='after')
+    def simple_repair(self):
+        from .tools import PatchArgs, ReadArgs
+        if self.action == 'stop':return self
+        if self.action != 'tool' or self.tool not in ('project.patch_file', 'project.read_file'):
+            raise ValueError('格式恢复只允许读取文件、单文件补丁或停止；未执行动作。')
+        args = PatchArgs if self.tool == 'project.patch_file' else ReadArgs
+        args.model_validate(self.arguments)
+        return self
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):
+        from copy import deepcopy
+        from .tools import PatchArgs, ReadArgs
+        schema = super().model_json_schema(*args, **kwargs)
+        branch = schema['oneOf'][0]
+        branches = []
+        for name, arguments in [('project.patch_file', PatchArgs), ('project.read_file', ReadArgs)]:
+            item = deepcopy(branch)
+            item['properties']['tool'] = {'type': 'string', 'const': name}
+            item['properties']['arguments'] = arguments.model_json_schema()
+            branches.append(item)
+        schema['oneOf'] = branches + [schema['oneOf'][-1]]
+        return schema
 
 
 class GeneratedFile(BaseModel):
@@ -159,6 +232,7 @@ def _connect() -> sqlite3.Connection:
         status TEXT NOT NULL, created_at TEXT NOT NULL
     )""")
     connection.execute("CREATE TABLE IF NOT EXISTS model_receipts (run_id TEXT NOT NULL, stage TEXT NOT NULL, fingerprint TEXT NOT NULL, value_json TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY(run_id,stage,fingerprint))")
+    connection.execute('CREATE TABLE IF NOT EXISTS model_call_errors (call_id TEXT PRIMARY KEY,category TEXT NOT NULL,http_status INTEGER)')
     return connection
 
 
@@ -253,21 +327,24 @@ def _reserve(run_id: str, stage: str, provider: str, model: str, budget: float, 
 
 def _settle(call_id: str, model: str, input_tokens: int, output_tokens: int) -> float:
     # Conservative peak price; never assume cache discounts or off-peak rates.
-    input_rate, output_rate = (0.66, 3.96) if model == "deepseek-v4-pro" else (0.30, 1.20)
-    usd = input_tokens * input_rate / 1_000_000 + output_tokens * output_rate / 1_000_000
-    cny = usd * 8.0
+    input_rate, output_rate = text_models.MODELS[model]["rates_cny"]
+    cny = (input_tokens * input_rate + output_tokens * output_rate) / 1_000_000
     with _db_connection() as connection:
         connection.execute("UPDATE model_usage SET actual_cny=?, input_tokens=?, output_tokens=?, status='completed' WHERE id=?", (cny, input_tokens, output_tokens, call_id))
     return round(cny, 6)
 
 
-def _client(settings: dict) -> OpenAI:
+def validate_route(settings: dict):
     if not settings["enabled"]:
-        raise ModelNotConfigured("模型调用未启用。请在项目 .env 中打开 MODEL_CALLS_ENABLED。")
-    if settings["provider"] != "deepseek":
-        raise ModelNotConfigured("当前首轮仅接入 DeepSeek；其他供应商稍后通过适配器加入。")
+        raise ModelNotConfigured("所选文字通道调用未启用；千问需同时开启总许可与独立文字许可。")
+    if settings["provider"] not in {"deepseek", "aliyun_text"}:
+        raise ModelNotConfigured("文字供应商不在允许列表中。")
     if not settings["api_key"]:
-        raise ModelNotConfigured("DeepSeek API Key 未配置。")
+        raise ModelNotConfigured("所选文字通道 API Key 未配置。")
+
+
+def _client(settings: dict) -> OpenAI:
+    validate_route(settings)
     return OpenAI(api_key=settings["api_key"], base_url=settings["base_url"], timeout=45, max_retries=0)
 
 
@@ -277,7 +354,22 @@ def parse_model_json(content: str,schema: type[T]) -> T:
         candidate=candidate[8:-3].strip()
     elif candidate.startswith('```\n') and candidate.endswith('```'):
         candidate=candidate[4:-3].strip()
-    return schema.model_validate(json.loads(candidate))
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ActionFormatError('JSON字段重复；每个字段只能出现一次，未执行任何动作。')
+            value[key] = item
+        return value
+    try:
+        value = json.loads(candidate, object_pairs_hook=unique)
+    except json.JSONDecodeError as error:
+        if error.msg == 'Extra data':
+            raise ActionFormatError('返回了多个JSON或对象后附加文字；一次仅返回一个JSON对象，未执行任何动作。') from error
+        raise
+    if not isinstance(value, dict):
+        raise ActionFormatError('顶层必须是单个JSON对象，不能是数组或字符串；未执行任何动作。')
+    return schema.model_validate(value)
 
 
 def cached_json(run_id, stage, system_prompt, user_prompt, schema, max_tokens, model_name=None):
@@ -285,7 +377,7 @@ def cached_json(run_id, stage, system_prompt, user_prompt, schema, max_tokens, m
     selected_model=model_name or _get_settings()['model']
     user_prompt += "\n输出必须符合此 JSON Schema：\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)
     import hashlib
-    fingerprint=hashlib.sha256(json.dumps({'system':system_prompt,'user':user_prompt,'model':selected_model,'max_tokens':max_tokens},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    fingerprint=hashlib.sha256(json.dumps({'system':system_prompt,'user':user_prompt,'model':selected_model,'max_tokens':max_tokens, **({'provider':'aliyun_text','endpoint':os.getenv('QWEN_TEXT_BASE_URL',text_models.QWEN_BASE).strip().rstrip('/')} if selected_model=='qwen3.8-flash' else {})},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     with _db_connection() as connection:
         receipt=connection.execute('SELECT value_json,metadata_json FROM model_receipts WHERE run_id=? AND stage=? AND fingerprint=?',(run_id,stage,fingerprint)).fetchone()
     if receipt is None:raise ModelCallFailed('上次智能体请求没有完整回执，结果不确定；未自动重复调用，原预留费用保留。')
@@ -295,20 +387,20 @@ def cached_json(run_id, stage, system_prompt, user_prompt, schema, max_tokens, m
 def generate_json(run_id: str, stage: str, system_prompt: str, user_prompt: str, schema: type[T], max_tokens: int = 900, model_name: str | None = None) -> tuple[T, dict]:
     settings = _get_settings()
     selected_model = model_name or settings["model"]
-    if selected_model not in SUPPORTED_MODELS:
-        raise ModelNotConfigured("所选 DeepSeek 模型不在允许列表中。")
-    settings["model"] = selected_model
+    try:settings = text_models.route(selected_model, settings)
+    except ValueError as error:raise ModelNotConfigured(str(error)) from None
+    if not 1 <= max_tokens <= 16000:raise ModelNotConfigured("输出容量不在受控范围内。")
     user_prompt += "\n输出必须符合此 JSON Schema：\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)
     import hashlib
-    fingerprint = hashlib.sha256(json.dumps({'system':system_prompt,'user':user_prompt,'model':selected_model,'max_tokens':max_tokens},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps({'system':system_prompt,'user':user_prompt,'model':selected_model,'max_tokens':max_tokens, **({'provider':'aliyun_text','endpoint':os.getenv('QWEN_TEXT_BASE_URL',text_models.QWEN_BASE).strip().rstrip('/')} if selected_model=='qwen3.8-flash' else {})},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     with _db_connection() as connection:
         receipt = connection.execute('SELECT value_json,metadata_json FROM model_receipts WHERE run_id=? AND stage=? AND fingerprint=?',(run_id,stage,fingerprint)).fetchone()
     if receipt:
         return schema.model_validate(json.loads(receipt['value_json'])), {**json.loads(receipt['metadata_json']),'replayed':True}
     client = _client(settings)
-    input_rate, output_rate = (0.66, 3.96) if selected_model == "deepseek-v4-pro" else (0.30, 1.20)
+    input_rate, output_rate = text_models.MODELS[selected_model]["rates_cny"]
     input_bound = len((system_prompt + user_prompt).encode("utf-8")) + 2000
-    reserve = max(0.35 if selected_model == "deepseek-v4-pro" else 0.25, round((input_bound * input_rate + max_tokens * output_rate) / 1_000_000 * 8 * 1.1 + 0.01, 4))
+    reserve = max(text_models.MODELS[selected_model]["minimum"], round((input_bound * input_rate + max_tokens * output_rate) / 1_000_000 * 1.1 + 0.01, 4))
     call_id = _reserve(run_id, stage, settings["provider"], settings["model"], settings["budget_cny"], reserve)
     try:
         response = client.chat.completions.create(
@@ -317,13 +409,16 @@ def generate_json(run_id: str, stage: str, system_prompt: str, user_prompt: str,
             response_format={"type": "json_object"},
             max_tokens=max_tokens,
             temperature=0.2,
-            extra_body={"thinking": {"type": "disabled"}},
+            extra_body=({"enable_thinking": False} if settings["provider"] == "aliyun_text" else {"thinking": {"type": "disabled"}}),
         )
     except Exception as exc:
+        diagnostic=safe_request_failure(exc)
         with _db_connection() as connection:
             # Preserve the full reserve: a connection failure may happen after the provider received the request.
             connection.execute("UPDATE model_usage SET status='uncertain' WHERE id=?", (call_id,))
-        raise ModelCallFailed("DeepSeek 请求失败；密钥已隐藏，预留额度暂时保留以防重复超支。") from exc
+            connection.execute('INSERT INTO model_call_errors VALUES (?,?,?)',(call_id,diagnostic['category'],diagnostic['http_status']))
+        label=diagnostic['category']+(f" / HTTP {diagnostic['http_status']}" if diagnostic['http_status'] else '')
+        raise ModelCallFailed('文字模型请求失败（'+label+'）。'+diagnostic['message']+' 没有切换供应商或自动重试，预留额度保留以防重复超支。') from None
 
     usage = response.usage
     input_tokens = getattr(usage, 'prompt_tokens', None)
@@ -354,11 +449,17 @@ def generate_json(run_id: str, stage: str, system_prompt: str, user_prompt: str,
         descriptor=os.open(failure_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
         with os.fdopen(descriptor,'w',encoding='utf-8') as stream:
             json.dump({'run_id':run_id,'stage':stage,'content':(content or '')[:200000],'metadata':metadata,'error_type':type(exc).__name__},stream,ensure_ascii=False)
-        if isinstance(exc, ValidationError):
+        if isinstance(exc, ActionFormatError):
+            reason = str(exc)
+        elif isinstance(exc, ValidationError):
             issues = [f"{'.'.join(str(part) for part in error['loc'])}:{error['type']}" + (':' + str(error.get('ctx',{}).get('error',''))[:140] if error['type']=='value_error' else '') for error in exc.errors()[:5]]
             reason = "字段校验 " + ", ".join(issues)
         elif isinstance(exc, json.JSONDecodeError):
-            reason = f"JSON格式不完整，位置{exc.pos}、第{exc.lineno}行"
+            hint = {"Expecting ':' delimiter": '属性名后缺少冒号，字符串值前必须有字段名和冒号',
+                    'Expecting property name enclosed in double quotes': '对象字段名必须用双引号，不能在字段名位置嵌套对象',
+                    "Expecting ',' delimiter": '字段或数组项间缺少逗号，检查字符串双引号转义',
+                    'Invalid \\escape': '字符串含非法反斜杠转义，JSON中的反斜杠须转义'}.get(exc.msg, '检查字段名、分隔符与字符串转义')
+            reason = f"JSON格式不完整，位置{exc.pos}、第{exc.lineno}行；{hint}"
         else:
             reason = "模型未返回有效内容"
         failure=ModelOutputInvalid(f"模型返回内容未通过结构校验（{reason}）；调用费用已计入预算。",metadata)

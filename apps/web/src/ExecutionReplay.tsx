@@ -1,5 +1,6 @@
+import BranchEditor from './BranchEditor'
 import { useState } from 'react'
-import { apiJson } from './api'
+import { apiJson, API_BASE } from './api'
 type Timeline = {
   events: {
     kind: string
@@ -22,6 +23,7 @@ type Result = {
   notice: string
   branches: {
     label: string
+    static_checks?: { total: number; passed: number }
     steps: number
     stop_reason: string
     source_digest: string
@@ -50,6 +52,7 @@ export default function ExecutionReplay({ runId }: { runId: string }) {
     [binding, setBinding] = useState<{
       token: string
       basis: object
+      receipts?: { id: string; tool: string; sha256: string }[]
       files: { path: string; sha256: string }[]
     } | null>(null),
     [decisions, setDecisions] = useState(preset),
@@ -144,17 +147,28 @@ export default function ExecutionReplay({ runId }: { runId: string }) {
                 <summary>绑定依据与文件版本</summary>
                 <pre>{JSON.stringify(binding, null, 2)}</pre>
               </details>
-              <label>
-                两个固定决策分支（JSON）
-                <textarea
-                  className="source-editor"
-                  value={decisions}
-                  onChange={(e) => setDecisions(e.target.value)}
-                  maxLength={120000}
-                />
-              </label>
+              <BranchEditor
+                key={binding.token}
+                value={decisions}
+                onChange={setDecisions}
+                files={binding.files}
+                receipts={binding.receipts}
+                disabled={busy}
+              />
+              <details>
+                <summary>高级：固定决策 JSON</summary>
+                <label>
+                  两个固定决策分支（JSON）
+                  <textarea
+                    className="source-editor"
+                    value={decisions}
+                    onChange={(e) => setDecisions(e.target.value)}
+                    maxLength={120000}
+                  />
+                </label>
+              </details>
               <p>
-                允许 read_file / apply_changes / finish / stop。apply_changes
+                允许读取/修改源码、纯文本断言、读取冻结回执或结束。apply_changes
                 使用受控文件操作及绑定的 expected_sha256；不允许命令或外部工具。
               </p>
               <label>
@@ -200,6 +214,9 @@ export default function ExecutionReplay({ runId }: { runId: string }) {
                   {r.same_source ? '两个分支源码相同' : '两个分支源码不同'}
                 </b>
                 <p>{r.notice}</p>
+                <a href={API_BASE + base + '/branches/' + r.id + '/export'} download>
+                  导出脱敏分支记录
+                </a>
                 <div className="template-grid">
                   {r.branches.map((b, i) => (
                     <div key={i}>
@@ -208,6 +225,12 @@ export default function ExecutionReplay({ runId }: { runId: string }) {
                         {b.steps} 步 · {b.stop_reason}
                       </p>
                       <small>{b.source_digest.slice(0, 16)}</small>
+                      {b.static_checks && (
+                        <p>
+                          源码断言：{b.static_checks.passed}/{b.static_checks.total}{' '}
+                          通过（不等于业务验收）
+                        </p>
+                      )}
                       <p>{b.changed_files.join('、') || '没有源码修改'}</p>
                       <details>
                         <summary>文件差异与操作证据</summary>

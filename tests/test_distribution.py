@@ -23,6 +23,21 @@ class DistributionTests(Fixture):
    with zipfile.ZipFile(self.package(kind)) as archive:
     shipped={name for name in archive.namelist() if name.startswith('benchmarks/')}
     self.assertEqual(shipped,{'benchmarks/'+name+'.spec.ts' for name in expected})
+ def test_readme_location_and_bundled_document_links_are_preserved(self):
+  (self.root/'docs').mkdir();(self.root/'docs/DISTRIBUTION.md').write_text('[License](../LICENSE)')
+  (self.root/'LICENSE').write_text('synthetic license')
+  readme='[Install](docs/DISTRIBUTION.md)\n[License](LICENSE)'
+  (self.root/'README.md').write_text(readme)
+  with zipfile.ZipFile(self.package('source')) as archive:
+   self.assertEqual(archive.read('README.md').decode(),readme)
+   d.validate_doc_links({name:archive.read(name) for name in archive.namelist()})
+ def test_missing_private_report_link_blocks_public_package(self):
+  (self.root/'README.md').write_text('[Private](outputs/private-report.md)')
+  with self.assertRaises(d.DistributionError):self.package('source')
+ def test_doc_links_handle_anchors_external_links_and_traversal(self):
+  d.validate_doc_links({'README.md':b'[Local](docs/SETUP.md#setup) [Web](https://example.com) [Section](#ok)','docs/SETUP.md':b'guide'})
+  for target in ['../LICENSE','docs/%2e%2e/%2e%2e/private.md']:
+   with self.assertRaises(d.DistributionError):d.validate_doc_links({'README.md':('[Bad]('+target+')').encode()})
  def test_source_omits_built_frontend(self):
   with zipfile.ZipFile(self.package('source')) as archive:self.assertNotIn('apps/web/dist/index.html',archive.namelist())
  def test_installers_include_built_assets_and_platform(self):
@@ -78,6 +93,34 @@ class DistributionTests(Fixture):
   with closing(sqlite3.connect(dest/'data/sample.sqlite3')) as conn:self.assertEqual(conn.execute('SELECT value FROM sample').fetchone()[0],'unchanged')
   (dest/'generated-projects/fixture/source.txt').write_text('new source');self.assertEqual((workspace/'source.txt').read_text(),'old source')
   if os.name!='nt':self.assertEqual((dest/'generated-projects/fixture/source.txt').stat().st_mode&0o777,0o666)
+ def test_first_upgrade_of_closed_wal_database_preserves_data(self):
+  (self.root/'data').mkdir();db=self.root/'data/ledger.sqlite3'
+  with closing(sqlite3.connect(db)) as conn:
+   conn.execute('PRAGMA journal_mode=WAL');conn.execute('CREATE TABLE fees(amount REAL)');conn.execute('INSERT INTO fees VALUES (1.75)');conn.commit()
+  self.assertFalse(db.with_name(db.name+'-wal').exists())
+  original=db.read_bytes();dest=self.base/'new';result=d.upgrade(self.root,self.package(),dest,True)
+  self.assertTrue(result['applied']);self.assertEqual(db.read_bytes(),original)
+  with closing(sqlite3.connect(dest/'data/ledger.sqlite3')) as conn:self.assertEqual(conn.execute('SELECT amount FROM fees').fetchone()[0],1.75)
+ def test_empty_wal_is_bookkeeping_but_pending_writes_change_snapshot(self):
+  (self.root/'data').mkdir();db=self.root/'data/ledger.sqlite3'
+  with closing(sqlite3.connect(db)) as conn:
+   conn.execute('PRAGMA journal_mode=WAL');conn.execute('CREATE TABLE fees(amount REAL)');conn.commit()
+  before=d.data_snapshot(self.root,[db])
+  with closing(sqlite3.connect(db.as_uri()+'?mode=ro',uri=True)) as reader:reader.execute('SELECT * FROM fees').fetchall()
+  self.assertEqual(d.data_snapshot(self.root,[db]),before)
+  with closing(sqlite3.connect(db)) as writer:
+   writer.execute('PRAGMA wal_autocheckpoint=0');writer.execute('INSERT INTO fees VALUES (2)');writer.commit()
+   self.assertNotEqual(d.data_snapshot(self.root,[db]),before)
+ def test_concurrent_wal_write_still_rejects_upgrade(self):
+  (self.root/'data').mkdir();db=self.root/'data/ledger.sqlite3'
+  with closing(sqlite3.connect(db)) as conn:
+   conn.execute('PRAGMA journal_mode=WAL');conn.execute('CREATE TABLE fees(amount REAL)');conn.commit()
+  original=d.check_database;writer=sqlite3.connect(db);self.addCleanup(writer.close)
+  def changed(path):
+   original(path);writer.execute('INSERT INTO fees VALUES (3)');writer.commit()
+  with patch.object(d,'check_database',side_effect=changed):
+   with self.assertRaises(d.DistributionError):d.upgrade(self.root,self.package(),self.base/'new',True)
+  self.assertFalse((self.base/'new').exists())
  def test_upgrade_refuses_live_process_and_low_disk(self):
   (self.root/'data').mkdir();(self.root/'data/api.pid').write_text(str(os.getpid()))
   with self.assertRaises(d.DistributionError):d.upgrade(self.root,self.package(),self.base/'new',True)

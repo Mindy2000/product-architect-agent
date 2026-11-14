@@ -4,7 +4,8 @@ from pathlib import Path
 from contextlib import closing
 from typing import Literal
 from fastapi import APIRouter,HTTPException
-from pydantic import BaseModel,ConfigDict,Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel,ConfigDict,Field,model_validator
 from . import collaboration as c,project,runner,store,tools,team
 from .security_policy import redact
 router=APIRouter(prefix='/api/v1/replay')
@@ -67,6 +68,7 @@ def binding(rid,point):
     basis={'run_id':rid,'source_checkpoint':checkpoint,'run_status':state.get('status'),'events_digest':hashed(events),
            'graph_checkpoints':matches,'checkpoint_match':bool(matches),'usage':budget_status(rid),'source_now':project.manifest(rid)['digest'],'steps':(matches[0]['steps'] if matches else state.get('team_steps',state.get('executor_turns',0))),
            'step_limit':state.get('execution_step_limit',40),'budget_cny':state.get('run_budget_cny',5),'repair_round':state.get('repair_round',0),
+           'role_models':state.get('role_models',{}),'model_name':state.get('model_name'),
            'policy_digest':hashed((Path(__file__).read_text()))}
     return files,basis,hashed(basis)
 
@@ -80,13 +82,27 @@ def timeline(rid:uuid.UUID):
 def preview_binding(rid:uuid.UUID,point:str='current'):
     with project.project_lock(str(rid)):
         files,basis,token=binding(str(rid),point)
-        return {'basis':basis,'token':token,'files':[{'path':p,'sha256':project.digest(t)} for p,t in files.items()]}
+        return {'basis':basis,'token':token,'files':[{'path':p,'sha256':project.digest(t)} for p,t in files.items()],
+                'receipts':receipt_catalog(str(rid))}
 
 class Decision(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    action:Literal['read_file','apply_changes','finish','stop']
+    action:Literal['read_file','apply_changes','check_file','read_receipt','finish','stop']
     path:str|None=Field(default=None,max_length=180)
     changes:list[project.FileChange]=Field(default_factory=list,max_length=16)
+    check:Literal['exists','contains','not_contains','sha256']|None=None
+    expected:str|None=Field(default=None,max_length=4000)
+    receipt_id:str|None=Field(default=None,max_length=160)
+    receipt_sha256:str|None=Field(default=None,pattern='^[0-9a-f]{64}$')
+    @model_validator(mode='after')
+    def action_fields(self):
+        if self.action=='check_file' and (not self.path or not self.check or (self.check!='exists' and not self.expected)):
+            raise ValueError('源码断言需要路径、检查方式和必要预期值')
+        if self.action=='read_receipt' and (not self.receipt_id or not self.receipt_sha256):
+            raise ValueError('读取冻结回执须绑定ID与指纹')
+        if self.action!='check_file' and (self.check is not None or self.expected is not None):raise ValueError('断言字段仅用于check_file')
+        if self.action!='read_receipt' and (self.receipt_id is not None or self.receipt_sha256 is not None):raise ValueError('回执字段仅用于read_receipt')
+        return self
 class Branch(BaseModel):
     model_config=ConfigDict(extra='forbid')
     label:str=Field(min_length=1,max_length=80)
@@ -99,11 +115,35 @@ class ReplayInput(BaseModel):
     step_limit:int=Field(default=8,ge=1,le=32)
 
 
+def receipt_catalog(rid):
+    with closing(team.connect()) as conn:
+        rows=conn.execute("SELECT operation_id,tool_name,status,result_json FROM tool_calls WHERE run_id=? ORDER BY started_at LIMIT 500",(rid,)).fetchall()
+    return [{'id':r['operation_id'],'tool':r['tool_name'],'status':r['status'],'sha256':hashed(json.loads(r['result_json']))} for r in rows if r['result_json']]
+
+
+def read_receipt(rid, decision):
+    with closing(team.connect()) as conn:
+        row=conn.execute('SELECT tool_name,status,result_json FROM tool_calls WHERE run_id=? AND operation_id=?',(rid,decision.receipt_id)).fetchone()
+    if not row or not row['result_json']:raise ValueError('当前任务没有完整的该回执')
+    value=json.loads(row['result_json'])
+    if hashed(value)!=decision.receipt_sha256:raise ValueError('冻结回执指纹不匹配')
+    encoded=json.dumps(redact_tree(value),ensure_ascii=False)
+    return {'tool':row['tool_name'],'original_status':row['status'],'receipt_sha256':decision.receipt_sha256,
+            'snapshot_excerpt':encoded[:12000],'omitted_characters':max(0,len(encoded)-12000),
+            'notice':'仅历史回执快照；没有再次调用工具，不能用作分支当前源码的检查结果'}
+
+
 def apply_fixed(files,decision):
     after=dict(files)
     if decision.action=='read_file':
         if decision.path not in files:raise ValueError('读取路径不在所选源码检查点内')
         return after,{'path':decision.path,'sha256':project.digest(files[decision.path]),'content':files[decision.path][:12000]}
+    if decision.action=='check_file':
+        if not project.managed_path(decision.path):raise ValueError('断言路径不受控')
+        body=files.get(decision.path)
+        passed=body is not None and {'exists':True,'contains':(decision.expected or '') in (body or ''),
+            'not_contains':(decision.expected or '') not in (body or ''),'sha256':project.digest(body or '')==decision.expected}[decision.check]
+        return after,{'path':decision.path,'check':decision.check,'passed':passed,'notice':'仅文本断言，不代表构建或业务验收'}
     if decision.action!='apply_changes':return after,{}
     if not decision.changes:raise ValueError('没有文件变更')
     seen=set()
@@ -146,15 +186,28 @@ def compare(rid:uuid.UUID,payload:ReplayInput):
                 for i,d in enumerate(branch.decisions):
                     if i>=min(payload.step_limit,max(0,basis['step_limit']-basis['steps'])):reason='达到分支步骤上限';break
                     if d.action in {'finish','stop'}:reason='固定决策结束' if d.action=='finish' else '固定决策停止';events.append({'step':i+1,'action':d.action});break
-                    try:files,result=apply_fixed(files,d)
+                    try:
+                        if d.action=='read_receipt':result=read_receipt(identifier,d)
+                        else:files,result=apply_fixed(files,d)
                     except (ValueError,project.ProjectError) as e:reason='受控操作被拒绝';events.append({'step':i+1,'action':d.action,'error':str(e)});break
                     events.append({'step':i+1,'action':d.action,'result':result,'digest':project.source_digest(files)})
+                    if d.action=='check_file' and not result['passed']:reason='源码断言未通过';break
                 # This directory contains text only, with no original keys, data, packages or executable commands.
                 for path,text in files.items():
                     dest=folder/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text(text)
                 results.append({'label':branch.label,'steps':len(events),'stop_reason':reason,'events':events,'source_digest':project.source_digest(files),
+                    'static_checks':{'total':sum(e['action']=='check_file' and 'result' in e for e in events),'passed':sum(e['action']=='check_file' and e.get('result',{}).get('passed',False) for e in events)},
                     'changed_files':sorted(p for p in source.keys()|files.keys() if source.get(p)!=files.get(p)),
                     'diff':'\n'.join(''.join(difflib.unified_diff(source.get(p,'').splitlines(True),files.get(p,'').splitlines(True),fromfile=p,tofile=p)) for p in sorted(source.keys()|files.keys()) if source.get(p)!=files.get(p))[:40000]})
         record={'id':str(uuid.uuid4()),'created_at':c.now(),'basis':basis,'token':token,'branches':results,'decisions':[b.model_dump(mode='json') for b in payload.branches],
                 'provider_calls':0,'cost_cny':0,'same_source':results[0]['source_digest']==results[1]['source_digest'],'mode':'fixed_source_decisions','notice':'独立文本副本；未执行生成代码、模型、构建或原工具副作用。原任务预算与检查点保持不变；运行质量须另行验证。'}
         return c.insert(identifier,'replay',record,20)
+
+
+@router.get('/{rid}/branches/{record_id}/export')
+def export_branch(rid:uuid.UUID,record_id:uuid.UUID):
+    c.require(str(rid))
+    record=next((v for v in c.records(str(rid),'replay') if v['id']==str(record_id)),None)
+    if not record:raise HTTPException(404,'分支记录不存在。')
+    return JSONResponse(redact_tree({'format':1,'record':record,'notice':'包含输入、绑定摘要与结果；不含完整运行时或密钥，不自动导入执行。'}),
+                        headers={'Content-Disposition':f'attachment; filename="replay-{record_id}.json"'})

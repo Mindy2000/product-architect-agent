@@ -20,6 +20,10 @@ type Matrix = {
     routes: string[]
     pending_routes: { route: string; reason: string }[]
     manual_checks: string[]
+    interface_contract?: {
+      scope: string
+      checks: { kind: string }[]
+    }
   }
   revision: number
   basis_hash: string
@@ -143,7 +147,7 @@ export default function AcceptanceEvidence({ runId }: { runId: string }) {
               : data.technical.test_kind === 'generated'
                 ? '生成测试通过，覆盖范围须核对'
                 : '无有效通过证据'}
-            ；固定页面基础检查：{data.technical.health_passed ? '通过' : '无有效通过证据'}。
+            ；固定页面与控件检查：{data.technical.health_passed ? '通过' : '无有效通过证据'}。
           </p>
           <p>
             固定检查路径：{data.coverage.routes.join('、')}
@@ -154,6 +158,19 @@ export default function AcceptanceEvidence({ runId }: { runId: string }) {
               待核对路径 {item.route}：{item.reason}
             </p>
           ))}
+          {data.coverage.interface_contract && (
+            <p>
+              已纳入独立检查：
+              {data.coverage.interface_contract.checks
+                .map((item) =>
+                  item.kind === 'crud_task_toggle'
+                    ? '勾选及时更新、保存失败回滚、重试与刷新持久化'
+                    : '删除按钮的完整名称、逐行删除与刷新持久化',
+                )
+                .join('；')}
+              。{data.coverage.interface_contract.scope}。
+            </p>
+          )}
           <p>仍需逐条核对：{data.coverage.manual_checks.join('；')}。</p>
           {data.criteria.map((item) => (
             <fieldset key={item.index} disabled={busy}>

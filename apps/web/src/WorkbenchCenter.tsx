@@ -1,3 +1,4 @@
+import EvidenceGuide from './EvidenceGuide'
 import EvaluationCenter from './EvaluationCenter'
 import { API_BASE, apiFetch } from './api'
 import { useEffect, useState } from 'react'
@@ -9,6 +10,11 @@ type Setup = {
   ready: boolean
   completed: boolean
   budget_cny: number
+  qwen_text?: { enabled: boolean; reuse_vision_key: boolean; base_url: string }
+  model_name?: string
+  available_models?: string[]
+  service_keys?: Record<string, boolean>
+  credential_notice?: string
   disk_text_enabled: boolean
   restart_required: boolean
 }
@@ -18,6 +24,15 @@ type Plan = {
   groups: { name: string; files: number; bytes: number }[]
   excluded: string[]
   warning: string
+  can_export: boolean
+  blockers: { code: string; message: string }[]
+  max_bytes: number
+  max_file_bytes: number
+  max_entries: number
+  available_disk_bytes: number
+  required_disk_bytes_estimate: number
+  estimate_notice: string
+  recovery_effects: string[]
 }
 type Preview = {
   token: string
@@ -25,6 +40,7 @@ type Preview = {
   bytes: number
   version: string
   message: string
+  effects?: { database_integrity: string; rollback: string; migration: string }
   archive_sha256?: string
   compatibility?: {
     source_version: string
@@ -87,7 +103,11 @@ const groupNames: Record<string, string> = {
 function SetupWizard({ onBack }: { onBack: () => void }) {
   const [status, setStatus] = useState<Setup | null>(null),
     [provider, setProvider] = useState('deepseek'),
+    [modelName, setModelName] = useState('deepseek-flash'),
     [key, setKey] = useState(''),
+    [qwenEnabled, setQwenEnabled] = useState(false),
+    [reuseVisionKey, setReuseVisionKey] = useState(false),
+    [qwenBase, setQwenBase] = useState('https://dashscope.aliyuncs.com/compatible-mode/v1'),
     [enabled, setEnabled] = useState(false),
     [budget, setBudget] = useState(99),
     [busy, setBusy] = useState(false),
@@ -100,7 +120,11 @@ function SetupWizard({ onBack }: { onBack: () => void }) {
       const next = (await json('/setup')) as Setup
       setStatus(next)
       setEnabled(next.disk_text_enabled)
+      setQwenEnabled(next.qwen_text?.enabled || false)
+      setReuseVisionKey(next.qwen_text?.reuse_vision_key || false)
+      setQwenBase(next.qwen_text?.base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1')
       setBudget(next.budget_cny)
+      setModelName(next.model_name || 'deepseek-flash')
     } catch (e) {
       setError(e instanceof Error ? e.message : '检查失败')
     } finally {
@@ -118,9 +142,16 @@ function SetupWizard({ onBack }: { onBack: () => void }) {
       const result = await json('/setup/config', {
         provider,
         api_key: key,
-        ...(provider === 'deepseek' ? { enabled, budget_cny: budget } : {}),
+        ...(provider === 'deepseek' ? { enabled, budget_cny: budget, model_name: modelName } : {}),
+        ...(provider === 'qwen_text'
+          ? { enabled: qwenEnabled, reuse_vision_key: reuseVisionKey, base_url: qwenBase }
+          : {}),
       })
       setKey('')
+      if (provider === 'deepseek') {
+        localStorage.setItem('product-architect-model', modelName)
+        window.dispatchEvent(new Event('model-default-changed'))
+      }
       await load()
       setNotice(result.message)
     } catch (e) {
@@ -184,9 +215,24 @@ function SetupWizard({ onBack }: { onBack: () => void }) {
           >
             <option value="deepseek">DeepSeek · 文字生成</option>
             <option value="qwen">千问 · 可选视觉理解</option>
+            <option value="qwen_text">千问 · 可选文字生成与审查</option>
             <option value="dify">Dify · 可选知识库</option>
           </select>
         </label>
+        <p>
+          当前服务密钥：
+          {status?.service_keys?.[provider] ? '已填写（未联网验证）' : '未填写或状态尚未读取'}。
+          {status?.credential_notice}
+        </p>
+        <p>
+          {provider === 'deepseek'
+            ? '用于需求、开发与审查。任务中可单独选择模型，已有项目不受默认值影响。'
+            : provider === 'qwen_text'
+              ? '北京 qwen3.8-flash；单独许可，费用计入既有总预算。密钥是否有该模型权限须后续最小调用验证。'
+              : provider === 'qwen'
+                ? '只配置视觉理解密钥，不会开启文字调用。'
+                : '用于可选远程语义检索。本地文档解析与全文检索无需此密钥。'}
+        </p>
         <label>
           API Key（留空保留已有密钥）
           <input
@@ -198,8 +244,55 @@ function SetupWizard({ onBack }: { onBack: () => void }) {
             maxLength={1024}
           />
         </label>
+        {provider === 'qwen_text' && (
+          <>
+            <label>
+              <input
+                type="checkbox"
+                checked={reuseVisionKey}
+                onChange={(e) => setReuseVisionKey(e.target.checked)}
+              />
+              显式复用现有千问视觉密钥（北京地域）
+            </label>
+            <label>
+              千问文字官方接口
+              <input
+                aria-label="千问文字官方接口"
+                value={qwenBase}
+                onChange={(e) => setQwenBase(e.target.value)}
+              />
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={qwenEnabled}
+                onChange={(e) => setQwenEnabled(e.target.checked)}
+              />
+              我允许千问文字产生费用（同时受文字总许可限制）
+            </label>
+            <p>
+              保存不会验证或调用；重启后仅在明确创建任务时使用。不会复用视觉次数许可，也不会自动切换供应商。
+            </p>
+          </>
+        )}
         {provider === 'deepseek' && (
           <>
+            <label>
+              默认文字模型
+              <select
+                aria-label="向导默认文字模型"
+                value={modelName}
+                onChange={(e) => setModelName(e.target.value)}
+              >
+                {(status?.available_models || ['deepseek-flash', 'deepseek-v4-pro'])
+                  .filter((m) => m.startsWith('deepseek-'))
+                  .map((m) => (
+                    <option value={m} key={m}>
+                      {m}
+                    </option>
+                  ))}
+              </select>
+            </label>
             <label>
               累计费用上限（人民币，0.25–99 元）
               <input
@@ -228,7 +321,11 @@ function SetupWizard({ onBack }: { onBack: () => void }) {
         </p>
         <button
           className="primary"
-          disabled={busy || (provider !== 'deepseek' && !key) || !Number.isFinite(budget)}
+          disabled={
+            busy ||
+            (!['deepseek', 'qwen_text'].includes(provider) && !key) ||
+            !Number.isFinite(budget)
+          }
           onClick={() => void save()}
         >
           保存本地配置
@@ -350,6 +447,25 @@ function WorkbenchBackup() {
             {plan.file_count} 个文件，原始大小约 {size(plan.bytes)}
             。备份前请暂停开发、等待资料处理完成并关闭交互预览。
           </p>
+          <p>{plan.estimate_notice}</p>
+          <p>
+            总上限 {size(plan.max_bytes)} · 单文件 {size(plan.max_file_bytes)} · 最多{' '}
+            {plan.max_entries.toLocaleString()} 文件。磁盘可用 {size(plan.available_disk_bytes)}
+            ，预计需要 {size(plan.required_disk_bytes_estimate)}。
+          </p>
+          {plan.blockers.length > 0 && (
+            <div role="alert" className="inline-state error">
+              <b>当前不能创建整套备份</b>
+              <ul>
+                {plan.blockers.map((item) => (
+                  <li key={item.code}>{item.message}</li>
+                ))}
+              </ul>
+              <p>
+                未删除或截断资料。可先单独导出项目或业务数据备份；请确认保留副本后自行整理资料。
+              </p>
+            </div>
+          )}
           <ul className="backup-groups">
             {plan.groups.map((g) => (
               <li key={g.name}>
@@ -370,7 +486,7 @@ function WorkbenchBackup() {
           </details>
           <button
             className="primary"
-            disabled={busy}
+            disabled={busy || !plan.can_export}
             onClick={() =>
               void run(async () => {
                 const job = await startLocalJob({ kind: 'backup' })
@@ -441,6 +557,13 @@ function WorkbenchBackup() {
       {preview && (
         <div className="restore-preview">
           <p>{preview.message}</p>
+          {preview.effects && (
+            <ul>
+              <li>{preview.effects.database_integrity}</li>
+              <li>{preview.effects.migration}</li>
+              <li>{preview.effects.rollback}</li>
+            </ul>
+          )}
           {preview.compatibility?.migration_required && (
             <div className="migration-preview">
               <b>
@@ -584,6 +707,7 @@ export default function WorkbenchCenter({ onBack }: { onBack: () => void }) {
       <SetupWizard onBack={onBack} />
       <WorkbenchBackup />
       <Diagnostics />
+      <EvidenceGuide />
       <EvaluationCenter />
       <MaintenanceHistory />
     </div>

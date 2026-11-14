@@ -1,3 +1,4 @@
+import KeyValueEditor, { pairsToRecord, type Pair } from './KeyValueEditor'
 import { useEffect, useState } from 'react'
 import { apiJson } from './api'
 type Rule = {
@@ -10,6 +11,7 @@ type Rule = {
   scope_type?: string
   targets?: string[]
   constraints?: Record<string, string>
+  priority?: number
   history: { revision: number; content: string; active: boolean; updated_at: string }[]
 }
 type Question = {
@@ -41,7 +43,8 @@ export default function CollaborationPanel({
     [busy, setBusy] = useState(false)
   const [scopeType, setScopeType] = useState('project'),
     [targets, setTargets] = useState(''),
-    [constraints, setConstraints] = useState('{}')
+    [constraints, setConstraints] = useState<Pair[]>([]),
+    [priority, setPriority] = useState(0)
   const base = '/collaboration/projects/' + runId
   async function refresh() {
     const [a, b] = await Promise.all([
@@ -78,6 +81,7 @@ export default function CollaborationPanel({
     try {
       await fn()
       await refresh()
+      window.dispatchEvent(new Event('project-rules-changed'))
     } catch (e) {
       setError(e instanceof Error ? e.message : '操作未完成')
     } finally {
@@ -165,7 +169,10 @@ export default function CollaborationPanel({
                   setSource(r.source)
                   setScopeType(r.scope_type || 'project')
                   setTargets((r.targets || []).join(','))
-                  setConstraints(JSON.stringify(r.constraints || {}))
+                  setConstraints(
+                    Object.entries(r.constraints || {}).map(([key, value]) => ({ key, value })),
+                  )
+                  setPriority(r.priority || 0)
                 }}
               >
                 编辑
@@ -181,6 +188,7 @@ export default function CollaborationPanel({
                         scope_type: r.scope_type || 'project',
                         targets: r.targets || [],
                         constraints: r.constraints || {},
+                        priority: r.priority || 0,
                         title: r.title,
                         content: r.content,
                         source: r.source,
@@ -232,12 +240,20 @@ export default function CollaborationPanel({
             <input value={targets} onChange={(e) => setTargets(e.target.value)} maxLength={1200} />
           </label>
         )}
+        <KeyValueEditor
+          label="规则字段"
+          rows={constraints}
+          onChange={setConstraints}
+          disabled={busy}
+        />
         <label>
-          可检查的结构化字段（可留空对象，例如 {`{"primary_color":"blue"}`}）
-          <textarea
-            value={constraints}
-            onChange={(e) => setConstraints(e.target.value)}
-            maxLength={3000}
+          处理优先级（0–100，仅提示，不自动覆盖）
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={priority}
+            onChange={(e) => setPriority(Number(e.target.value))}
           />
         </label>
         <label>
@@ -260,7 +276,8 @@ export default function CollaborationPanel({
                           .split(',')
                           .map((v) => v.trim())
                           .filter(Boolean),
-                  constraints: JSON.parse(constraints),
+                  constraints: pairsToRecord(constraints),
+                  priority,
                   title,
                   content,
                   source,

@@ -1,95 +1,64 @@
-# Product Architect Agent
+# 安装、配置与发行说明
 
-当前版本0.6.0。唯一状态入口：[PROJECT_STATUS](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/PROJECT_STATUS.md)。前四项收尾记录：[AUDIT_CLOSEOUT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_CLOSEOUT.md)。
+工程版本 **0.6.0**，当前为本地候选修复，尚未正式发行。本轮验收结果绑定候选文件 SHA256；既有 GitHub 构建或历史报告不能证明当前候选通过。最新能力、真实验证结果和固定收尾清单见 [项目状态](PROJECT_STATUS.md)。
 
-中文本地产品架构与应用开发工作台。支持需求方案确认、统一调度与产品规划/开发/审查测试三个专业智能体、受控工具执行、React应用、可选FastAPI/SQLite CRUD、localStorage、文档参考/可选知识库、隔离构建与Playwright检查、有限自动修复、Git版本和源码/数据备份。
+## 环境与安装
 
-## 下载与安装
+这是个人本地中文工作台，无需注册账号。需要 Python 3.13、Git 和 Linux 容器环境。macOS 使用 Colima 与 Docker CLI；从源码构建界面还需 Node.js 24。安装依赖需要联网，建议为首次容器准备另留 8 GiB。模型费用由用户供应商账户承担；安装、配置和诊断不调用模型。
 
-GitHub仓库提供两条路径：
+源码与预构建安装 ZIP 共用同一套程序及安装管理入口：
 
-- **源码**：克隆仓库或下载Source code ZIP，按docs/SETUP.md安装。
-- **安装包**：正式 Release 尚未发布；发布后，从GitHub Releases下载macOS `.dmg`或Windows x64 `.exe`。同时提供带SHA256清单的安装ZIP，便于校验和并排升级。
+- **源码**：在新目录解压白名单源码 ZIP，运行 `python3.13 scripts/manage.py install`。该入口创建虚拟环境、安装锁定 Python/npm 依赖并构建界面。仓库源码准备说明见 [SETUP](SETUP.md)。
+- **macOS 安装 ZIP**：解压到新目录，运行 `安装.command` 或上述安装命令。包内已有界面，无需宿主 Node；仍需安装 Python 依赖及准备容器环境。用 `python3.13 scripts/manage.py install --plan` 可先查看安装步骤。
+- 固定容器镜像尚未准备时，可显式加 `--prepare-runtime`；本轮离线验收复用本机已存在的固定镜像，不代表首次镜像下载速度或供应商网络可用性。
 
-安装包包含应用源码、预构建中文界面和安装启动入口。它是轻量本地安装器：首次使用仍需要Python 3.13、Git和Linux容器环境，并联网安装锁定的Python依赖。它不会把多GB Docker镜像、系统Python、API Key或用户项目塞进软件包。预构建安装包不要求宿主Node；从源码构建界面需要Node.js 24。
+仅用于本地验收的候选 ZIP 不是正式 Release，也不是 DMG/EXE。仓库保留 macOS/Windows 原生包与 GitHub Actions 构建配方，但本轮不生成原生安装器、不触发远程构建、不验证 Windows。不能宣称 Windows 完整运行已通过。未签名/公证的候选文件不会自动绕过操作系统安全保护。
 
-macOS使用Colima和Docker CLI；Windows使用Docker Desktop的Linux容器后端（通常为WSL2）。首次镜像准备建议另留8GiB磁盘。模型调用是用户供应商账户的消费，安装和诊断不调用模型。
+## 配置和启动
 
-macOS：打开DMG，将Product Architect.app拖入Applications，打开应用会在终端中引导安装并启动本机工作台；工作目录位于`~/Library/Application Support/ProductArchitect/versions/<版本>`。需要保留启动终端。
+macOS 入口：`配置.command`、`启动.command`、`停止.command`、`诊断.command`。跨入口的同一套命令为：
 
-Windows：运行EXE，安装到当前用户目录的独立版本文件夹；从开始菜单的Start/Configure/Doctor入口使用。第一次Start会安装固定Python依赖。安装器不自动启用WSL、不替用户重启、不自动充值或连接私人账号。
+```sh
+python3.13 scripts/manage.py config init
+python3.13 scripts/manage.py config wizard
+python3.13 scripts/manage.py serve --no-open
+# 另一个终端停止当前目录的服务
+python3.13 scripts/manage.py stop
+```
 
-目前候选包没有Developer ID公证或Windows发布者签名，系统可能要求人工确认来源；不会自动移除系统安全隔离。安装源码及发布者签名可审查，SHA256只校验完整性，不替代发布者身份验证。
+工作台位于 `http://127.0.0.1:5173/`，只面向本机；保持启动终端打开。生成代码只在受控容器执行。安装不会自动调用供应商，也不扫描用户私人目录。
 
-## 配置与启动
+本地 `.env` 保存用户自己的 Key，禁止提交或分享。支持 DeepSeek 文字、千问文字及独立视觉通道；千问文字使用 `QWEN_TEXT_API_KEY`，或由用户显式设置 `QWEN_TEXT_USE_VISION_KEY=true` 复用已配置视觉 Key。角色模型在任务确认时冻结。填 Key 不等于允许付费调用：必须核对 `MODEL_CALLS_ENABLED`、`QWEN_TEXT_CALLS_ENABLED`、`VISION_CALLS_ENABLED` 及预算，并重启生效。示例配置默认关闭调用。
 
-macOS解压安装ZIP可运行`安装.command`、`配置.command`、`启动.command`、`停止.command`、`诊断.command`；Windows对应`install.cmd`、`config.cmd`、`start.cmd`、`stop.cmd`、`doctor.cmd`。
+Dify 是可选知识库接口，不影响核心开发流程。当前不使用、不验证远程 Dify；用户无需为本轮验收配置它。本地文本/OCR/全文检索仍可使用。平台额度与价格不由本项目保证，不自动充值或切换付费备用服务。
 
-配置入口支持DeepSeek文字、千问视觉、Dify知识库。Key通过隐藏输入保存在当前版本`.env`，不会出现在诊断结果、命令参数或发行包中。填写Key不会自动开启调用。需要使用文字模型时，由用户在本地`.env`明确设置`MODEL_CALLS_ENABLED=true`，核对费用上限后重启。视觉默认关闭，另有次数/金额限制。Dify为可选插件：先保存Key，再在知识库面板核对并确认免费策略；保存策略和解除暂停都只改本机记录，不自动联网、重置台账或重试。
+## 升级和回退
 
-工作台地址：`http://127.0.0.1:5173/`。无需账号，仅限本机。界面使用预构建静态文件；生成代码始终在受限容器内运行。
-
-## 升级与回退
-
-升级采用并排新目录，旧版本保持完整。先暂停任务并停止旧服务，下载官方Release的带清单安装ZIP：
+先暂停任务并停止旧工作台。使用带 `RELEASE_MANIFEST.json` 和 SHA256 的安装 ZIP，将升级复制到独立新目录：
 
 ```sh
 # 预览，不改文件
 python3.13 scripts/manage.py upgrade /path/to/release.zip --destination /path/to/new-version
-# 确认复制代码、配置和数据到独立新目录
+# 执行并排复制，不覆盖旧目录
 python3.13 scripts/manage.py upgrade /path/to/release.zip --destination /path/to/new-version --apply
 ```
 
-Windows使用`py -3.13`替代`python3.13`。升级副本包含原`.env`、费用台账、SQLite检查点、项目源码与交付；SQLite使用一致性备份复制，不覆盖旧目录，不复制旧`.venv`或依赖目录。然后在新目录运行安装入口。升级和安装均不会发起模型请求。
+升级保留旧目录，复制 `.env`、费用记录、SQLite 检查点、项目源码和交付；数据库使用一致性备份，不复制旧虚拟环境和依赖。新目录运行安装入口后再启动。升级不调用模型。
 
-失败时可停止新版本、从旧目录启动。若新版本已经产生新资料，应先导出数据；不会为了“回退”自动用旧数据库覆盖新数据。`scripts/manage.py rollback-info`显示旧版本定位。不同版本的安装包各自独立；直接运行另一版本的安装器不自动覆盖或搬迁旧资料。
+回退先停止新版本，再从旧目录启动；`scripts/manage.py rollback-info` 显示旧版本位置。新版本若已有新资料，先导出再决定，不用旧数据库自动覆盖新数据。
 
-## 公开发布流程
+## 备份、恢复和诊断
 
-GitHub Actions分别在macOS和Windows构建，包含安装器回归、API启动、前端类型检查/构建、白名单打包、DMG/EXE及SHA256生成。上传与package.json匹配的`v<版本>`标签后，只生成**Release草稿**，需维护者审阅再公开。手动触发只保留Actions产物，不自动发布。
+「设置与维护」提供首次使用向导、整套工作台备份恢复和集中脱敏诊断。备份包含私人业务资料，需妥善保管；不含 `.env`、依赖、日志与缓存。工作台恢复创建旁侧独立副本，密钥为空、调用关闭、历史费用保留；不覆盖当前工作台，不联网导出 Dify 云端内容。升级复制本机配置与工作台备份排除密钥是两种不同操作。
 
-源码ZIP和安装ZIP只包含白名单工程文件；排除.env、用户data/outputs/generated-projects、.git、node_modules、虚拟环境、个人协作记录和本地实验报告。本项目使用[MIT许可证](../LICENSE)，第三方组件保留各自许可，见[第三方声明](../THIRD_PARTY_NOTICES.md)。发布前仍需核对仓库内容与历史。
+备份最大 512 MiB、单文件 128 MiB；仅允许同版本及明确支持的兼容升级。活动任务和预览须先停止。诊断只导出白名单系统/配置状态，不包含密钥、需求、文档、源码或原始日志，不自动上传。详见 [维护说明](WORKBENCH_MAINTENANCE.md)。
 
-没有GitHub账号登录功能；使用GitHub下载不意味着模型服务免费。第三方包使用其各自许可证；Windows安装器采用免费的NSIS编译器。
+## 验收和分发边界
 
-## 验证范围与当前限制
+统一离线验收命令与范围见 [离线质量说明](OFFLINE_QUALITY_AND_MAINTENANCE.md)。固定模型响应能够验证调度、工具、故障恢复及交付，不能代表真实自主开发能力；剩余一次 CRUD 真实复测须另行授权费用。单次通过也不等于任意需求都可靠。
 
-已在macOS验证本地安装和隔离运行链路；GitHub的macOS、Windows构建包含安装升级回归、API启动和界面构建。Windows完整Docker Desktop/WSL2生成任务尚待设备验证。离线固定响应可验证工作流和工具执行，但不代表真实模型对任意需求的自主成功率。
+源码/安装 ZIP 按白名单打包，排除真实 `.env`、data、outputs、generated-projects、Git 历史、依赖目录、私人协作记录及本地实验报告；公开说明和六套标准独立验收文件随包分发。`scripts/manage.py verify <zip>` 校验文件与清单。SHA256 证明文件一致性，不证明发布者身份。
 
-工作台默认关闭模型调用。遇到服务未连接时，请运行启动入口并保持窗口打开；首次使用先配置自己的Key、明确启用文字模型和预算，再重启。恢复源码先生成暂停副本，手动继续才会构建验收。六套独立产品验收文件随源码和安装ZIP一同分发，不需要另外下载。
+正式发行仍暂停。未来 GitHub Actions 可基于同一源码构建原生包；工作流配置不等于构建已执行。匹配版本的标签流程生成草稿，维护者审阅后才公开。当前不上传本地候选文件、不创建标签、不发布草稿。
 
-当前GitHub Actions产物保留14天；正式Release就绪前，不把构建产物链接视为长期下载地址。项目源码备份、业务数据库与附件备份仍可单独使用；整套工作台灾备现已在「设置与维护」提供。
-
-## 设置与维护
-
-左侧「设置与维护」集中提供三项功能：
-
-- **首次使用向导**：检查本机工具与容器状态，填写DeepSeek/千问/Dify各自密钥。文字模型的费用许可须明确勾选，保存后停止并重新启动才能生效；向导不发起供应商验证请求。已有密钥不回显，留空保留。
-- **整套工作台备份恢复**：先预览再下载，覆盖项目、方案、SQLite检查点、费用、Git历史、本地知识库、业务数据库与附件。排除.env、依赖、日志与缓存；Dify只备份本地记录，云端知识库不联网导出。先停止活动任务、关闭交互预览，再创建备份。备份包含私人业务资料，请妥善保管。
-- **集中脱敏诊断**：先预览，再下载相同快照。只导出系统/依赖版本、配置布尔状态和任务状态计数；不含Key、安装路径、需求、文档、源码或原始日志，不自动上传。
-
-工作台备份限制512MiB、单文件128MiB，恢复支持相同版本及兼容策略明确列出的升级路径，未知版本或降级会拒绝。上传预览24小时有效，可重新校验或移除；诊断预览10分钟有效。恢复会在当前工作台旁的 `<当前工作台目录名>-restored/<UUID>` 创建独立工作台，当前目录保留；新副本密钥为空、模型调用关闭、旧费用保留。停止旧工作台，在新目录运行安装入口，再配置和启动；恢复本身不执行生成代码或调用模型。
-
-## 0.3 持续维护
-
-新增离线完整流程 CI、0.2→0.3 工作台兼容恢复、可取消维护任务、父子版本回归比较和 Dify 离线故障检查。见 [操作与边界](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/OFFLINE_QUALITY_AND_MAINTENANCE.md)。真实模型任务和 Windows 完整 Docker 验证仍暂缓，不代表已完成。
-
-0.3.1 将“执行完成”与需求逐条验收分开；新增固定页面基础检查与源码绑定的人工/独立证据记录。交付报告和ZIP内包含交付时验收快照，最新记录可从项目面板导出。运行资源一次只允许一个构建/浏览器/预览，现有容量保持不变。
-
-0.3.2修复上下文/缺失用量/项目选择竞态，验证缓存与验收绑定运行环境，固定基础检查覆盖已确认静态Hash页面。旧回执缺少环境指纹时显示待重新验证，不自动运行原项目。支持指定旧版本兼容升级，详见[AUDIT_OPTIMIZATION](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/AUDIT_OPTIMIZATION.md)。
-
-0.3.3补齐异步操作选择保护、父子回归页面检查及环境证据，历史报告会明确标注是否仍适用。正式Release与Windows完整运行仍暂缓。
-
-## 0.4 三智能体协作
-
-新开发任务默认由统一调度协调产品规划、开发、审查测试三个专业智能体。每个角色有独立提示、上下文和权限；只有开发角色可修改源码，审查意见按条关联冻结需求。三个角色共享单任务预算、步骤与最多三轮修复限制，仍采用同一个已选文字模型。无需新增API Key。旧任务保持原流程，恢复源码副本仍只执行无模型验证。见 [MULTI_AGENT](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/MULTI_AGENT.md)。
-
-0.4.1完成协作收尾：环境异常时保留安全源码导出，明确停止状态；在原限额内预留审查步骤/费用/调用次数；规划逐条分配责任；问题编号、历轮证据及无变化提前停止。新增规则只用于新任务，旧检查点不追加强制规划或资源限制。没有新增供应商或真实调用授权。
-
-## 0.5 六项使用能力
-
-页面点选修改、开发中澄清、项目长期规则、三套能力模板、本地视觉回归和离线质量/成本评测已接入。模板创建草稿、保存规则/意见和截图比较均不调用模型；开始开发、生成修改方案及继续任务仍遵循原费用开关和预算。评测使用固定响应，不代表真实模型能力。详见 [六项扩展说明](docs/INTERACTIVE_EXPANSION.md)。
-
-### 0.6 协作深化
-
-新增协作资料归档与引用保护、意见状态闭环、按范围选择规则、桌面/手机固定数据视觉对照、自定义版本化源码模板、显式元素源码定位、故障注入离线评测及执行记录/固定决策分支比较。完整边界与使用说明见 [COLLABORATION_EVOLUTION](https://github.com/Mindy2000/product-architect-agent/blob/main/docs/COLLABORATION_EVOLUTION.md)。真实模型任务、Windows完整验证和正式Release继续暂缓。
+使用 [MIT 许可证](../LICENSE)，第三方许可见 [第三方声明](../THIRD_PARTY_NOTICES.md)。

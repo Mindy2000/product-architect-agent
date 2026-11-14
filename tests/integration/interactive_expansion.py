@@ -19,7 +19,7 @@ def fixed(rid,stage,system,user,schema,**kw):
  if stage.startswith('agent-reviewer-'):
   if turn<=2:return schema(action='tool',summary='读取实现与测试',tool='project.read_file',arguments={'path':'src/App.tsx' if turn==1 else 'tests/e2e.spec.ts'}),{}
   assert all(ctx['technical'].get(x) for x in ('build_passed','test_passed','health_passed','environment_verified')),ctx
-  return schema(action='submit',summary='固定响应审查',review=team.ReviewReport(verdict='ready_for_manual',summary='合成流程完成，业务另行验收',criteria=[team.CriterionReview(index=i,status='manual',evidence='真实业务效果需另行验收') for i in range(len(ctx['acceptance_criteria']))])),{}
+  return schema(action='submit',summary='固定响应审查',review=team.ReviewReport(verdict='ready_for_manual',summary='合成流程完成，业务另行验收',criteria=[team.CriterionReview(index=i,status='manual',evidence='真实业务效果需另行验收') for i in range(len(ctx['acceptance_criteria']))]).model_dump()),{}
  if turn in (1,3):return model.ExecutorDecision(action='tool',task_id=f'task-{(turn+1)//2}',tool='project.read_file',arguments={'path':'src/App.tsx' if turn==1 else 'tests/e2e.spec.ts'},summary='读取模板'),{}
  if turn==5:return model.ExecutorDecision(action='tool',task_id='task-3',tool='git.snapshot',arguments={},summary='保存快照'),{}
  if turn in (2,4,6):return model.ExecutorDecision(action='complete_task',task_id=f'task-{turn//2}',summary='任务完成'),{}
@@ -38,7 +38,7 @@ try:
   time.sleep(.1)
  assert server.started
  with sync_playwright() as pw:
-  browser=pw.chromium.launch(headless=True)
+  browser=pw.chromium.launch(headless=True,channel=os.environ.get('PA_UI_BROWSER_CHANNEL') or None)
   try:
    page=browser.new_page(viewport={'width':1440,'height':1000});page.on('pageerror',lambda e:errors.append(str(e)));page.goto('http://127.0.0.1:5173');page.wait_for_load_state('networkidle');assert not errors,errors
    page.screenshot(path=str(ROOT/'outputs/offline-expansion-initial.png'),full_page=True)

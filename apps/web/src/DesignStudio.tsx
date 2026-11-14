@@ -48,6 +48,7 @@ type Draft = {
   request: string
   spec: Spec | null
   error: string
+  role_models?: Record<string, string>
   model_name: string
   run_budget_cny: number
   execution_step_limit: number
@@ -375,6 +376,15 @@ export default function DesignStudio({
           <p className="design-scope">
             模型：{draft.model_name} · 开发执行上限：{draft.execution_step_limit} 步 ·
             方案与开发共用上述费用上限
+          </p>
+          <p className="design-scope">
+            角色模型（已随方案保存）：
+            {(['planner', 'developer', 'reviewer'] as const)
+              .map(
+                (role) =>
+                  `${{ planner: '规划', developer: '开发', reviewer: '审查' }[role]}：${draft.role_models?.[role] || draft.model_name}`,
+              )
+              .join('；')}
           </p>
           {draft.template_id ||
           draft.project_rules?.length ||
