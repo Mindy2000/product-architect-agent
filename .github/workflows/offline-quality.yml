@@ -1,14 +1,14 @@
 name: Offline full workflow quality
+# Frozen source preparation: no automatic runs on push or pull requests.
+# Resume only after an explicit decision to run validation again.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
   workflow_call:
 permissions:
   contents: read
 jobs:
   offline:
+    if: ${{ false }} # Validation remains paused, including manual/reusable calls.
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:

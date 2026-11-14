@@ -1,14 +1,15 @@
 name: Build installation packages
+# Packaging, Windows jobs and releases are paused. Do not enable on source upload.
 on:
   workflow_dispatch:
-  push:
-    tags: ['v*']
 permissions:
   contents: read
 jobs:
   quality:
+    if: ${{ false }}
     uses: ./.github/workflows/offline-quality.yml
   package:
+    if: ${{ false }}
     needs: quality
     strategy:
       fail-fast: false
@@ -19,6 +20,7 @@ jobs:
     env:
       PYTHONUTF8: '1'
       MODEL_CALLS_ENABLED: 'false'
+      QWEN_TEXT_CALLS_ENABLED: 'false'
       VISION_CALLS_ENABLED: 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,7 +103,7 @@ jobs:
           retention-days: 14
   draft-release:
     needs: package
-    if: startsWith(github.ref, 'refs/tags/')
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

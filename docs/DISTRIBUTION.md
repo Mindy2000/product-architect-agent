@@ -1,6 +1,6 @@
 # 安装、配置与发行说明
 
-工程版本 **0.6.0**，当前为本地候选修复，尚未正式发行。本轮验收结果绑定候选文件 SHA256；既有 GitHub 构建或历史报告不能证明当前候选通过。最新能力、真实验证结果和固定收尾清单见 [项目状态](PROJECT_STATUS.md)。
+工程版本 **0.6.0**，业务实现冻结于本地候选 5，尚未正式发行。本轮验收结果绑定候选文件 SHA256；既有 GitHub 构建或历史报告不能证明当前候选通过。最新能力、真实验证结果和固定收尾清单见 [项目状态](PROJECT_STATUS.md)。
 
 ## 环境与安装
 
@@ -8,7 +8,7 @@
 
 源码与预构建安装 ZIP 共用同一套程序及安装管理入口：
 
-- **源码**：在新目录解压白名单源码 ZIP，运行 `python3.13 scripts/manage.py install`。该入口创建虚拟环境、安装锁定 Python/npm 依赖并构建界面。仓库源码准备说明见 [SETUP](SETUP.md)。
+- **源码**：克隆公开仓库或在新目录解压源码 ZIP，运行 `python3.13 scripts/manage.py install`。该入口创建虚拟环境、安装锁定 Python/npm 依赖并构建界面。仓库源码准备说明见 [SETUP](SETUP.md)。
 - **macOS 安装 ZIP**：解压到新目录，运行 `安装.command` 或上述安装命令。包内已有界面，无需宿主 Node；仍需安装 Python 依赖及准备容器环境。用 `python3.13 scripts/manage.py install --plan` 可先查看安装步骤。
 - 固定容器镜像尚未准备时，可显式加 `--prepare-runtime`；本轮离线验收复用本机已存在的固定镜像，不代表首次镜像下载速度或供应商网络可用性。
 
@@ -43,6 +43,8 @@ python3.13 scripts/manage.py upgrade /path/to/release.zip --destination /path/to
 python3.13 scripts/manage.py upgrade /path/to/release.zip --destination /path/to/new-version --apply
 ```
 
+GitHub 自动提供的 Source code ZIP 没有本项目升级清单，不能直接用于上述升级命令。该命令需要本项目打包入口生成的安装 ZIP；当前没有公开正式安装包。
+
 升级保留旧目录，复制 `.env`、费用记录、SQLite 检查点、项目源码和交付；数据库使用一致性备份，不复制旧虚拟环境和依赖。新目录运行安装入口后再启动。升级不调用模型。
 
 回退先停止新版本，再从旧目录启动；`scripts/manage.py rollback-info` 显示旧版本位置。新版本若已有新资料，先导出再决定，不用旧数据库自动覆盖新数据。
@@ -55,10 +57,10 @@ python3.13 scripts/manage.py upgrade /path/to/release.zip --destination /path/to
 
 ## 验收和分发边界
 
-统一离线验收命令与范围见 [离线质量说明](OFFLINE_QUALITY_AND_MAINTENANCE.md)。固定模型响应能够验证调度、工具、故障恢复及交付，不能代表真实自主开发能力；剩余一次 CRUD 真实复测须另行授权费用。单次通过也不等于任意需求都可靠。
+统一离线验收命令与范围见 [离线质量说明](OFFLINE_QUALITY_AND_MAINTENANCE.md)。固定模型响应能够验证调度、工具、故障恢复及交付，不能代表真实自主开发能力；最近一次 CRUD 真实复测功能检查 4/4 通过，但最终审查连接失败，完整闭环仍未通过。当前已停止新增验证；后续若恢复复测须另行授权。单次通过也不等于任意需求都可靠。
 
 源码/安装 ZIP 按白名单打包，排除真实 `.env`、data、outputs、generated-projects、Git 历史、依赖目录、私人协作记录及本地实验报告；公开说明和六套标准独立验收文件随包分发。`scripts/manage.py verify <zip>` 校验文件与清单。SHA256 证明文件一致性，不证明发布者身份。
 
-正式发行仍暂停。未来 GitHub Actions 可基于同一源码构建原生包；工作流配置不等于构建已执行。匹配版本的标签流程生成草稿，维护者审阅后才公开。当前不上传本地候选文件、不创建标签、不发布草稿。
+正式发行仍暂停。GitHub 工作流目前移除了自动 push/PR/tag 触发，测试、打包和草稿发布 job 都设置为暂停；保留配方仅供将来明确恢复。源码同步不触发测试、Windows、安装包或 Release，也不上传本地候选 ZIP 或创建标签。未来恢复时须明确平台、验证与发行范围；工作流配方和历史构建记录不等于当前版本已运行。
 
 使用 [MIT 许可证](../LICENSE)，第三方许可见 [第三方声明](../THIRD_PARTY_NOTICES.md)。

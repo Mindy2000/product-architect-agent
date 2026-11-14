@@ -1,4 +1,4 @@
-> 历史验证与实现说明：当前状态以 [PROJECT_STATUS.md](PROJECT_STATUS.md) 为准；本文保留对应版本的证据和边界。
+> 历史验证与实现说明：当前状态以 [PROJECT_STATUS.md](PROJECT_STATUS.md) 为准。新增验证已暂停，下列命令仅保留为操作参考；本次上传准备没有执行它们。
 
 # 0.3 离线质量与持续维护
 
@@ -10,7 +10,7 @@
 
 使用固定模型响应，覆盖需求编辑确认、计划、暂停、重新打开 SQLite checkpoint、构建故意失败、一次修复、Playwright、预览、源码/Trace/Git diff 交付；另覆盖全栈 CRUD、附件、业务备份、本地知识库、整套工作台恢复及恢复后的 checkpoint。生成代码只在禁网固定容器执行，不运行生成项目自带的安装脚本。CI 没有供应商凭证，不验证真实模型成功率。
 
-`.github/workflows/offline-quality.yml` 在 main 更新、PR 和手动触发时运行。原生包工作流先依赖该质量检查；这里只配置自动构建，不发布正式 Release。证据为 `offline-quality-evidence`，保留 14 天。可复现报告在 `outputs/offline-quality/report.json`。
+`.github/workflows/offline-quality.yml` 原先随 main 更新或 PR 运行，当前已移除自动触发，并将执行 job 暂停；原生包和草稿发布工作流也暂停。只保留手动/复用入口与配方，未恢复前不会执行 job。过去的证据产物名为 `offline-quality-evidence`、保留 14 天；以后明确恢复时仍可使用该路径。不能把旧 CI 结果当作新同步提交已通过。
 
 ### 当前统一入口（0.6.0 候选）
 
